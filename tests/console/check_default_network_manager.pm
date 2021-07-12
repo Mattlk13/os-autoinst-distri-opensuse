@@ -1,10 +1,11 @@
-# Copyright (C) 2018 SUSE LLC
+# Copyright (C) 2018-2020 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: systemd-network
 # Summary: Check that the network daemon in use is the expected one
 # - check which network daemon is in use
 # - based on the system (SLE, JeOS, SLED, openSUSE), check that
@@ -20,14 +21,13 @@ use utils;
 use version_utils;
 
 sub run {
-    select_console 'root-console';
-
-    zypper_call('in systemd-network', exitcode => [0, 104]);
+    my $self = shift;
+    $self->select_serial_terminal;
 
     assert_script_run 'ip a';
 
     if (is_opensuse) {
-        # check for systemd-networkd
+        zypper_call 'in systemd-network';
         systemctl 'is-enabled systemd-networkd', expect_false => 1;
         systemctl 'is-active systemd-networkd',  expect_false => 1;
         assert_script_run 'networkctl status';

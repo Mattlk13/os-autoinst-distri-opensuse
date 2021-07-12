@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright © 2017-2018 SUSE LLC
+# Copyright © 2017-2020 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -9,6 +9,7 @@
 #
 # Testopia case_id 1454736
 #
+# Package: wget unzip
 # Summary: Basic tests for unzip
 #    1. Unzip (basic usage)
 #    2. Unzip into a new directory
@@ -24,8 +25,8 @@ use testapi;
 use utils 'zypper_call';
 
 sub run {
-    # Preparation
-    select_console 'root-console';
+    my $self = shift;
+    $self->select_serial_terminal;
     zypper_call 'in wget unzip';
     assert_script_run 'mkdir -p /tmp/unzip-test/ && pushd /tmp/unzip-test';
 

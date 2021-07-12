@@ -1,10 +1,10 @@
 ---
 name: mau-filesystem
-description: Filesystem tests on Maintenance prepared image 
+description: Filesystem tests on Maintenance prepared image
 vars:
   COLLECT_COREDUMPS: '1'
 schedule:
-- {{boot}}
+- '{{boot}}'
 - boot/boot_to_desktop
 - console/prepare_test_data
 - console/consoletest_setup
@@ -16,10 +16,13 @@ schedule:
 - console/btrfs_qgroups
 - console/snapper_cleanup
 - console/btrfs_send_receive
+- console/btrfsmaintenance
 - console/snapper_undochange
 - console/snapper_create
 - console/snapper_thin_lvm
 - console/snapper_used_space
+- network/cifs
+- console/udisks2
 - console/coredump_collect
 conditional_schedule:
   boot:

@@ -1,12 +1,13 @@
 # SUSE's Apache regression test
 #
-# Copyright © 2019 SUSE LLC
+# Copyright © 2019-2021 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: apache2 apache2-mod_php72 php72-php72-curl
 # Summary: Test various apche2 basic scenarios
 #  * Test the default vhost after installation
 #  * Test custom vhost domain, custom vhost port
@@ -22,7 +23,8 @@ use utils;
 use version_utils qw(is_sle is_jeos);
 
 sub run {
-    select_console 'root-console';
+    my ($self) = @_;
+    $self->select_serial_terminal;
 
     # installation of docs and manpages is excluded in zypp.conf
     # enable full package installation, and clean up previous apache2 deployment
@@ -45,6 +47,26 @@ sub run {
     systemctl 'enable apache2';
     systemctl 'start apache2';
     systemctl 'status apache2';
+
+    # Check if apache is working when php module is enabled
+    # LTSS module test does not have apache2-mod_php72 php72-curl
+    # Install apache2-mod_php72 php72-curl for versions smaller than SLE12-SP5, as dependencies for enabling php7 on SLE15+ are fulfilled
+    if (get_var('SCC_ADDONS') != 'ltss' && is_sle('<=12-SP5')) {
+        zypper_call('in apache2-mod_php72 php72-curl');
+    }
+
+    # Following the reproducer of bug#1174667, the regression was detected when php7 module enabled and when stopping or reloading apache service
+    assert_script_run('a2enmod php7');
+    systemctl 'stop apache2';
+    systemctl 'start apache2';
+    systemctl 'reload apache2';
+    systemctl 'status apache2';
+    assert_script_run 'a2dismod php7';
+
+    # In order to avoid future conflicts, apache2-mod_php72 php72-curl and their dependencies are removed
+    if (get_var('SCC_ADDONS') != 'ltss' && is_sle('<=12-SP5')) {
+        zypper_call('rm --clean-deps apache2-mod_php72 php72-curl');
+    }
 
     # Check if the server works and serves the right content
     assert_script_run 'curl -v http://localhost/ | grep "index"';
@@ -117,10 +139,11 @@ sub run {
 
             # Run and test this new environment
             assert_script_run 'httpd2-prefork -f /tmp/prefork/httpd.conf';
+            assert_script_run 'until ps aux|grep wwwrun; do echo waiting for httpd2-prefork pid; done';
             assert_script_run 'ps aux | grep "\-f /tmp/prefork/httpd.conf" | grep httpd2-prefork';
 
             # Run and test the old environment too
-            assert_script_run 'rm /var/run/httpd.pid';
+            script_run 'rm /var/run/httpd.pid';
             systemctl 'start apache2';
             assert_script_run 'ps aux | grep "\-f /etc/apache2/httpd.conf" | grep httpd-prefork';
 
@@ -150,18 +173,13 @@ sub run {
     assert_script_run 'touch /srv/www/vhosts/localhost/authtest/.htpasswd';
     assert_script_run 'chmod 640 /srv/www/vhosts/localhost/authtest/.htpasswd';
     assert_script_run 'chown root:www /srv/www/vhosts/localhost/authtest/.htpasswd';
-    assert_script_run 'htpasswd2 -s -b /srv/www/vhosts/localhost/authtest/.htpasswd joe secret';
+    assert_script_run 'htpasswd -s -b /srv/www/vhosts/localhost/authtest/.htpasswd joe secret';
 
     # Paste the .htaccess file
-    assert_script_run "echo 'AuthType Basic
-    AuthName \"only joe must get in!\"
-    AuthUserFile /srv/www/vhosts/localhost/authtest/.htpasswd
-    Require valid-user' > /srv/www/vhosts/localhost/authtest/.htaccess";
+    assert_script_run('curl -o /srv/www/vhosts/localhost/authtest/.htaccess ' . data_url('console/apache_.htaccess'));
 
     # Paste the config file
-    assert_script_run "echo '<Directory \"/srv/www/vhosts/localhost/authtest\">
-    AllowOverride AuthConfig
-    </Directory>' > /etc/apache2/conf.d/authtest.conf";
+    assert_script_run('curl -o /etc/apache2/conf.d/authtest.conf ' . data_url('console/apache_authtest.conf'));
 
     # Start the webserver and test the password access
     systemctl 'start apache2';

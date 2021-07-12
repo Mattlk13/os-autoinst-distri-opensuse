@@ -1,7 +1,7 @@
 # SUSE's openQA tests
 #
 # Copyright © 2009-2013 Bernhard M. Wiedemann
-# Copyright © 2012-2018 SUSE LLC
+# Copyright © 2012-2021 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -12,18 +12,18 @@
 #    test kmp modules & boot RT kernel script for further automated and regression RT tests
 #    list of KMP rpms: cluster-md-kmp-rt, gfs2-kmp-rt, dlm-kmp-rt, crash-kmp-rt, oracleasm-kmp-rt
 #    lttng-modules-kmp-rt, ocfs2-kmp-rt
-# Maintainer: Jozef Pupava <jpupava@suse.com>
+# Maintainer: QE Kernel <kernel-qa@suse.de>
 
 use base "opensusebasetest";
 use strict;
 use warnings;
 use testapi;
 use utils qw(zypper_call clear_console);
-use version_utils 'is_sle';
-use rt_utils 'select_kernel';
-use File::Basename 'fileparse';
-use power_action_utils 'power_action';
-use Utils::Systemd 'systemctl';
+use version_utils qw(is_sle);
+use rt_utils qw(select_kernel);
+use File::Basename qw(fileparse);
+use power_action_utils qw(power_action);
+use Utils::Systemd qw(systemctl);
 
 sub run_lttng_demo_trace {
     my $trace = {
@@ -64,30 +64,35 @@ sub run {
 
     # allow to load unsupported modules
     script_run 'sed -i s\'/^allow_unsupported_modules 0/allow_unsupported_modules 1/\' /etc/modprobe.d/10-unsupported-modules.conf';
-    zypper_call 'ref';
 
-    # slert12sp4 does not install lttng-tools by default as sle15sp1
     # install kmp packages
-    zypper_call 'in lttng-tools' if (is_sle('<15'));
-    zypper_call 'in *-kmp-rt', 500;
+    # Add build repo for slert15sp2+
+    if (script_run('zypper lr SLE_RT_IBS_REPO') && is_sle('>15-SP1')) {
+        my $version = get_var('VERSION');
+        zypper_call "ar -f -p 101 http://download.suse.de/ibs/SUSE:/SLE-$version:/Update:/Products:/SLERT/standard SLE_RT_IBS_REPO";
+    }
+    zypper_call 'ref';
+    zypper_call 'in lttng-tools *-kmp-rt', 500;
 
     # Reboot in order to select RT kernel
-    power_action('reboot', textmode => 1);
-    select_kernel('rt');
-    assert_screen 'generic-desktop';
+    if (script_run q|egrep 'BOOT_IMAGE=/boot/vmlinuz-.*-[[:digit:]]-rt' /proc/cmdline|) {
+        power_action('reboot', textmode => 1);
+        select_kernel('rt');
+        assert_screen 'generic-desktop';
+        $self->select_serial_terminal;
+    }
 
     # switched to RT kernel
     # check if kernel is proper $kernel
     # filter out list of kernel modules
-    $self->select_serial_terminal;
     assert_script_run('uname -r|grep rt', 90, 'Expected rt kernel not found');
 
-    my @kmp_rpms = grep { !/lttng-modules/ } split("\n", script_output "rpm -qa \*-kmp-rt");
+    my @kmp_rpms = grep { $_ !~ m/lttng/ && $_ !~ m/kselftests-kmp-rt/ } split("\n", script_output "rpm -qa \*-kmp-rt");
     my @kernel_modules;
     push @kernel_modules, grep { /.*\.ko/ } split("\n", script_output "rpm -ql $_") foreach (@kmp_rpms);
     # load kernel modules
     foreach my $full_module (@kernel_modules) {
-        my ($basename, $dir, $suffix) = fileparse($full_module, '.ko');
+        my ($basename, $dir, $suffix) = fileparse($full_module, qr/.ko.*/);
         assert_script_run 'modprobe -v ' . $basename . ' 2>&1 | tee -a /var/log/modprobe.out';
         assert_script_run "modinfo $basename";
         save_screenshot;
@@ -95,6 +100,7 @@ sub run {
 
     # verify lttng basic tracing functionality
     run_lttng_demo_trace;
+    assert_script_run 'killall lttng-sessiond';
     clear_console;
 }
 
@@ -103,12 +109,16 @@ sub post_fail_hook {
 
     select_console 'log-console';
 
-    $self->save_and_upload_log("dmesg",                 "dmesg.log",        {screenshot => 1});
-    $self->save_and_upload_log("journalctl --no-pager", "journalctl.log",   {screenshot => 1});
-    $self->save_and_upload_log('rpm -qa *-kmp-rt',      "list_of_kmp_rpms", {screenshot => 1});
+    $self->save_and_upload_log("dmesg",                                  "dmesg.log",        {screenshot => 1});
+    $self->save_and_upload_log("journalctl --no-pager -o short-precise", "journalctl.log",   {screenshot => 1});
+    $self->save_and_upload_log('rpm -qa *-kmp-rt',                       "list_of_kmp_rpms", {screenshot => 1});
     if ((script_run 'test -e /var/log/modprobe.out') == 0) {
         upload_logs '/var/log/modprobe.out';
     }
+}
+
+sub test_flags {
+    return {milestone => 1};
 }
 
 1;

@@ -7,6 +7,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: zypper
 # Summary: test for 'zypper lifecycle'
 # - Run "zypper lifecycle" and parse its output for some header and links
 # - Runs a series of checks to determine a suitable package to validade
@@ -25,7 +26,7 @@
 # - Check return of "zypper lifecycle --days 0"
 # - Check output of "zypper lifecycle --days 9999"
 # - Check output of "zypper lifecycle --date $(date --iso-8601)"
-# Maintainer: Oliver Kurz <okurz@suse.de>
+# Maintainer: QE Core <qe-core@suse.de>
 # Tags: fate#320597
 
 use base "consoletest";
@@ -33,14 +34,31 @@ use strict;
 use warnings;
 use testapi;
 use utils;
-use version_utils qw(is_sle is_jeos);
+use version_utils qw(is_sle is_jeos is_upgrade);
+use Utils::Architectures;
 
 our $date_re = qr/[0-9]{4}-[0-9]{2}-[0-9]{2}/;
 
 sub run {
     diag('fate#320597: Introduce \'zypper lifecycle\' to provide information about life cycle of individual products and packages');
-    select_console 'user-console';
-    my $overview = script_output 'zypper lifecycle', 300;
+
+    # Workaround for bsc#1166549, zypper lifecycle error with 'Error building the cache'.
+    # Currently the only workaround option is to run zypper-lifecycle as root.
+
+    # Now we just hit bsc#1166549 on s390x and ppc64le, so we just need root console
+    # on these two platforms.
+    my $needs_root_console = 0;
+    if ((is_s390x || is_ppc64le) && is_sle('>=15-SP3') && is_upgrade) {
+        $needs_root_console = 1;
+        record_soft_failure 'bsc#1166549 - zypper lifecycle failed to create metadata cache directory';
+    }
+    select_console 'root-console';
+
+    # We add 'zypper ref' here to download and preparse the metadata of packages,
+    # which will make the follow 'zypper lifecycle' runs faster.
+    script_run('zypper ref');
+    select_console 'user-console' unless $needs_root_console;
+    my $overview = script_output('zypper lifecycle', 600);
     die "Missing header line:\nOutput: '$overview'" unless $overview =~ /Product end of support/;
     die "Missing link to lifecycle page:\nOutput: '$overview'"
       if $overview =~ /n\/a/ && $overview !~ qr{\*\) See https://www.suse.com/lifecycle for latest information};
@@ -93,7 +111,7 @@ sub run {
     mkdir -p /var/lib/lifecycle/data
     echo '$package, *, $testdate' > /var/lib/lifecycle/data/$prod.lifecycle";
     # verify eol from lifecycle data
-    select_console 'user-console';
+    select_console 'user-console' unless $needs_root_console;
     $output = script_output "zypper lifecycle $package", 300;
     die "$package lifecycle entry incorrect:\nOutput: '$output'" unless $output =~ /$package(-\S+)?\s+$testdate/;
 
@@ -118,14 +136,14 @@ sub run {
 
     my $product_eol;
     for my $l (split /\n/, $overview) {
-        if ($l =~ /^(?<!Codestream:)\s+$product_name\s*(\S*)/) {
-            $product_eol = $1;
+        if ($l =~ /^(?<!Codestream:)\s+(Product: )?$product_name\s*(\S*)/) {
+            $product_eol = $2;
             last;
         }
     }
     die "baseproduct eol not found in overview\nOutput: '$product_name'" unless $product_eol;
 
-    select_console 'user-console';
+    select_console 'user-console' unless $needs_root_console;
     # verify that package eol defaults to product eol
     $output = script_output "zypper lifecycle $package", 300;
     unless ($output =~ /$package(-\S+)?\s+$product_eol/) {
@@ -139,7 +157,7 @@ sub run {
         mv /var/lib/lifecycle/data/$prod.lifecycle.orig /var/lib/lifecycle/data/$prod.lifecycle
     fi";
     #
-    select_console 'user-console';
+    select_console 'user-console' unless $needs_root_console;
     # 4. verify that "zypper lifecycle --days N" and "zypper lifecycle --date
     # D" shows correct results
     assert_script_run 'zypper lifecycle --help';

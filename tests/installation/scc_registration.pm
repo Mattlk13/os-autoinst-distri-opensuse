@@ -1,4 +1,4 @@
-# Copyright (C) 2014-2019 SUSE LLC
+# Copyright © 2014-2020 SUSE LLC
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -18,7 +18,7 @@
 #   - Handle registration (gpg key, nvidia validation, registration server,
 #   repositories, beta, products, addons)
 # - Otherwise, skip registration
-# Maintainer: Oliver Kurz <okurz@suse.de>
+# Maintainer: QA SLE YaST team <qa-sle-yast@suse.de>
 
 use strict;
 use warnings;

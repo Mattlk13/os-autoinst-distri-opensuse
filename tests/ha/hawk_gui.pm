@@ -1,12 +1,13 @@
 # SUSE's openQA tests
 #
-# Copyright (c) 2016-2018 SUSE LLC
+# Copyright (c) 2016-2020 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: docker MozillaFirefox
 # Summary: check HAWK GUI with the a python+selenium script and firefox
 # Maintainer: Alvaro Carvajal <acarvajal@suse.de>
 
@@ -34,6 +35,13 @@ sub run {
     my ($self) = @_;
     my $cluster_name = get_cluster_name;
 
+    # For facilitating the QEM process, the hawk client system will always be a 15-SP3 version
+    # That means we need to change the version and reload the needles
+    if (get_var('CLIENT_VERSION')) {
+        set_var('VERSION', get_var('CLIENT_VERSION'), reload_needles => 1);
+        record_info('Version switch', 'New version = ' . get_var('VERSION'));
+    }
+
     # Wait for each cluster node to check for its hawk service
     barrier_wait("HAWK_GUI_INIT_$cluster_name");
 
@@ -46,10 +54,19 @@ sub run {
     install_docker;
 
     # TODO: Use another namespace using team group name
-    my $docker_image = "registry.opensuse.org/home/rbranco/branches/opensuse/templates/images/tumbleweed/containers/hawk_test";
+    # Docker image source in https://github.com/ricardobranco777/hawk_test
+    # It will be eventually moved to https://github.com/ClusterLabs/hawk/e2e_test
+    my $docker_image = "registry.opensuse.org/home/rbranco/branches/opensuse/templates/images/15.2/containers/hawk_test:latest";
+
     assert_script_run("docker pull $docker_image", 240);
 
-    select_console 'x11';
+    # Rest of the test needs to be performed on the x11 console, but with the
+    # HA_CLUSTER setting that console is not yet activated; newer versions of gdm
+    # expect the console on tty2 which can lead to false positives as there is no
+    # session there yet, so instead this goes through the displaymanager console to
+    # login into the x11 session.
+    select_console 'displaymanager';
+    $self->handle_displaymanager_login();
     x11_start_program('xterm');
     turn_off_gnome_screensaver;
 
@@ -58,7 +75,6 @@ sub run {
 
     # Run test
     my $browser    = 'firefox';
-    my $version    = get_required_var('VERSION');
     my $node1      = choose_node(1);
     my $node2      = choose_node(2);
     my $results    = "$path/$pyscr.results";
@@ -70,9 +86,10 @@ sub run {
     add_to_known_hosts($node2);
     assert_script_run "mkdir -m 1777 $path";
     assert_script_run "xhost +";
+    barrier_wait("HAWK_GUI_CPU_TEST_START_$cluster_name");
     my $docker_cmd = "docker run --rm --name test --ipc=host -v /tmp/.X11-unix:/tmp/.X11-unix -e DISPLAY=\$DISPLAY -v \$PWD/$path:/$path ";
-    $docker_cmd .= "$docker_image -b $browser -t $version -H $node1 -S $node2 -s $testapi::password -r /$results --virtual-ip $virtual_ip";
-    type_string "$docker_cmd | tee $logs; echo $pyscr-\$PIPESTATUS > $retcode\n";
+    $docker_cmd .= "$docker_image -b $browser -H $node1 -S $node2 -s $testapi::password -r /$results --virtual-ip $virtual_ip";
+    enter_cmd "$docker_cmd | tee $logs; echo $pyscr-\$PIPESTATUS > $retcode";
     assert_screen "hawk-$browser", 60;
 
     my $loop_count = 360;    # 30 minutes (360*5)
@@ -98,6 +115,7 @@ sub run {
     save_screenshot;
 
     assert_screen "generic-desktop";
+    barrier_wait("HAWK_GUI_CPU_TEST_FINISH_$cluster_name");
 
     # Error, log and results handling
     select_console 'user-console';

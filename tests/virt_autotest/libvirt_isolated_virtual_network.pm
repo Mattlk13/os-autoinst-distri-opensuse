@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright (C) 2019 SUSE LLC
+# Copyright (C) 2019-2020 SUSE LLC
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -25,10 +25,12 @@ use base "virt_feature_test_base";
 use virt_utils;
 use set_config_as_glue;
 use virt_autotest::virtual_network_utils;
+use virt_autotest::utils;
 use strict;
 use warnings;
 use testapi;
 use utils;
+use version_utils 'is_sle';
 
 sub run_test {
     my ($self) = @_;
@@ -43,52 +45,54 @@ sub run_test {
     upload_logs "vnet_isolated.xml";
     assert_script_run("rm -rf vnet_isolated.xml");
 
-    my $gi_vnet_isolated;
-    foreach my $guest (keys %xen::guests) {
+    my ($mac, $model, $affecter, $exclusive);
+    my $gate = '192.168.127.1';    # This host exists but should not work as a gate in the ISOLATED NETWORK
+    foreach my $guest (keys %virt_autotest::common::guests) {
         record_info "$guest", "ISOLATED NETWORK for $guest";
-        #figure out that used with virtio as the network device model during
-        #attach-interface via virsh worked for all sles guest
-        assert_script_run("virsh attach-interface $guest network vnet_isolated --model virtio --live");
-        #Get the Guest IP Address from ISOLATED NETWORK
-        if (get_var("XEN") || check_var("HOST_HYPERVISOR", "xen")) {
-            my $mac_isolated = script_output("virsh domiflist $guest | grep vnet_isolated | grep -oE \"[[:xdigit:]]{2}(:[[:xdigit:]]{2}){5}\"");
-            script_retry "ip neigh | grep $mac_isolated | grep -oE \"([0-9]{1,3}[\.]){3}[0-9]{1,3}\"", delay => 90, retry => 9, timeout => 90;
-            $gi_vnet_isolated = script_output("ip neigh | grep $mac_isolated | grep -oE \"([0-9]{1,3}[\.]){3}[0-9]{1,3}\"");
+        ensure_online $_, skip_network => 1;
+
+        if (is_sle('=11-sp4') && is_xen_host) {
+            $affecter  = "--persistent";
+            $exclusive = "bridge --live --persistent";
+        } else {
+            $affecter  = "";
+            $exclusive = "network --current";
         }
-        else {
-            script_retry "virsh net-dhcp-leases vnet_isolated | grep -oE \"([0-9]{1,3}[\.]){3}[0-9]{1,3}\"", delay => 90, retry => 9, timeout => 90;
-            $gi_vnet_isolated = script_output("virsh net-dhcp-leases vnet_isolated | grep -oE \"([0-9]{1,3}[\.]){3}[0-9]{1,3}\"");
-        }
-        #Confirm ISOLATED NETWORK
-        assert_script_run("! ssh root\@$gi_vnet_isolated 'ping -c2 -W1 openqa.suse.de'");
-        save_screenshot;
-        assert_script_run("virsh detach-interface $guest network --current");
+
+        $mac   = '00:16:3e:32:' . (int(rand(89)) + 10) . ':' . (int(rand(89)) + 10);
+        $model = (is_xen_host) ? 'netfront' : 'virtio';
+
+        #Check guest loaded kernel module before attach interface to guest system
+        check_guest_module("$guest", module => "acpiphp");
+        assert_script_run("virsh attach-interface $guest network vnet_isolated --model $model --mac $mac --live $affecter", 60);
+
+        #Wait for guests attached interface from virtual isolated network
+        sleep 30;
+        my $net = is_sle('=11-sp4') ? 'br123' : 'vnet_isolated';
+        test_network_interface($guest, mac => $mac, gate => $gate, isolated => 1, net => $net);
+
+        assert_script_run("virsh detach-interface $guest --mac $mac $exclusive");
     }
+
     #Destroy ISOLATED NETWORK
     assert_script_run("virsh net-destroy vnet_isolated");
     save_screenshot;
 
-    #Restore br123 for virt_autotest
-    virt_autotest::virtual_network_utils::restore_standalone();
+    #After finished all virtual network test, need to restore file /etc/hosts from backup
+    virt_autotest::virtual_network_utils::hosts_restore();
 
-    #Restore Guest systems
-    virt_autotest::virtual_network_utils::restore_guests();
-
-    #Restart libvirtd service
-    virt_autotest::virtual_network_utils::restart_libvirtd();
-
+    #Skip restart network service due to bsc#1166570
     #Restart network service
-    virt_autotest::virtual_network_utils::restart_network();
+    #virt_autotest::virtual_network_utils::restart_network();
 }
 
 sub post_fail_hook {
     my ($self) = @_;
 
-    #Upload debug log
-    virt_autotest::virtual_network_utils::upload_debug_log();
+    $self->SUPER::post_fail_hook;
 
     #Restart libvirtd service
-    virt_autotest::virtual_network_utils::restart_libvirtd();
+    virt_autotest::utils::restart_libvirtd();
 
     #Destroy created virtual networks
     virt_autotest::virtual_network_utils::destroy_vir_network();

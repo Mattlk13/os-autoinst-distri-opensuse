@@ -9,7 +9,7 @@
 
 # Summary: CPU BUGS on Linux kernel check
 # Maintainer: James Wang <jnwang@suse.com>
-
+package l1tf;
 use strict;
 use warnings;
 
@@ -22,11 +22,12 @@ use power_action_utils 'power_action';
 
 use Mitigation;
 
-my %mitigations_list =
+our %mitigations_list =
   (
-    name                   => "l1tf",
-    CPUID                  => hex '10000000',
-    IA32_ARCH_CAPABILITIES => 8,                #bit3 --SKIP_L1TF_VMENTRY
+    name => "l1tf",
+    #Refer to https://software.intel.com/security-software-guidance/insights/processors-affected-l1-terminal-fault
+    CPUID                  => hex 'ffffffff',    #Ignore CPUID checking
+    IA32_ARCH_CAPABILITIES => 1,                 #Use MSR bit#0 RDCL_NO check
     parameter              => 'l1tf',
     cpuflags               => ['flush_l1d'],
     sysfs_name             => "l1tf",
@@ -58,30 +59,31 @@ sub run {
     }
     my $obj = Mitigation->new(\%mitigations_list);
     #run base function testing
-    $obj->do_test();
-
-    assert_script_run('cat /sys/devices/system/cpu/smt/active | grep "1"');
-    assert_script_run('echo off>/sys/devices/system/cpu/smt/control');
-    assert_script_run('lscpu | grep "Off-line CPU(s) list"');
-    assert_script_run('cat /sys/devices/system/cpu/smt/active | grep "0"');
-    add_grub_cmdline_settings("l1tf=full,force");
-    update_grub_and_reboot($self, 150);
-    assert_script_run('lscpu | grep "Off-line CPU(s) list"');
-    assert_script_run('cat /sys/devices/system/cpu/smt/active | grep "0"');
-    assert_script_run('cat /sys/devices/system/cpu/smt/control | grep "forceoff"');
-    die "Control cannot be modified under the mode of forceoff" unless script_run('echo on>/sys/devices/system/cpu/smt/control');
-    assert_script_run('cat /sys/devices/system/cpu/smt/control | grep "forceoff"');
-    remove_grub_cmdline_settings("l1tf=full,force");
-    update_grub_and_reboot($self, 150);
-    assert_script_run('cat /sys/module/kvm_intel/parameters/ept | grep "Y"');
-    my $damn = script_run('modprobe -r kvm_intel | grep "kvm"');
-    if ($damn eq 0) {
-        record_info('fail', "Couldn't find kvm when removed the kvm_intel");
-        die;
+    my $ret = $obj->do_test();
+    if ($ret ne 2) {
+        assert_script_run('cat /sys/devices/system/cpu/smt/active | grep "1"');
+        assert_script_run('echo off>/sys/devices/system/cpu/smt/control');
+        assert_script_run('lscpu | grep "Off-line CPU(s) list"');
+        assert_script_run('cat /sys/devices/system/cpu/smt/active | grep "0"');
+        add_grub_cmdline_settings("l1tf=full,force");
+        update_grub_and_reboot($self, 150);
+        assert_script_run('lscpu | grep "Off-line CPU(s) list"');
+        assert_script_run('cat /sys/devices/system/cpu/smt/active | grep "0"');
+        assert_script_run('cat /sys/devices/system/cpu/smt/control | grep "forceoff"');
+        die "Control cannot be modified under the mode of forceoff" unless script_run('echo on>/sys/devices/system/cpu/smt/control');
+        assert_script_run('cat /sys/devices/system/cpu/smt/control | grep "forceoff"');
+        remove_grub_cmdline_settings("l1tf=full,force");
+        update_grub_and_reboot($self, 150);
+        assert_script_run('cat /sys/module/kvm_intel/parameters/ept | grep "Y"');
+        my $damn = script_run('modprobe -r kvm_intel | grep "kvm"');
+        if ($damn eq 0) {
+            record_info('fail', "Couldn't find kvm when removed the kvm_intel");
+            die;
+        }
+        assert_script_run('modprobe kvm_intel ept=0;lsmod | grep "kvm"');
+        check_param('/sys/module/kvm_intel/parameters/ept', "N");
+        assert_script_run('cat /sys/devices/system/cpu/vulnerabilities/l1tf | grep "EPT disabled"');
     }
-    assert_script_run('modprobe kvm_intel ept=0;lsmod | grep "kvm"');
-    check_param('/sys/module/kvm_intel/parameters/ept', "N");
-    assert_script_run('cat /sys/devices/system/cpu/vulnerabilities/l1tf | grep "EPT disabled"');
 }
 
 sub update_grub_and_reboot {

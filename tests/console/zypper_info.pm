@@ -1,12 +1,13 @@
 # SUSE's openQA tests
 #
-# Copyright © 2017 SUSE LLC
+# Copyright © 2017-2020 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: zypper
 # Summary: Ensure zypper info shows expected output
 # - Check output of "zypper info vim" for header and package name
 # - Add zypper source repository to correspondent distro version
@@ -52,7 +53,8 @@ sub test_package_output {
 }
 
 sub run {
-    select_console 'root-console';
+    my $self = shift;
+    $self->select_serial_terminal;
 
     # check for zypper info
     test_package_output;

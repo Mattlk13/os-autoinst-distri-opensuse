@@ -1,4 +1,4 @@
-# Copyright © 2019 SUSE LLC
+# Copyright © 2019-2021 SUSE LLC
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -24,13 +24,17 @@ use warnings;
 use File::Basename;
 use testapi qw(get_var set_var diag);
 use main_common 'loadtest';
-use YAML::Tiny;
+use YAML::PP;
+use YAML::PP::Schema::Include;
 use Data::Dumper;
 
 our @EXPORT = qw(load_yaml_schedule get_test_suite_data);
 
 my $test_suite_data;
-my $include_tag = "!include";
+my $root_project_dir = dirname(__FILE__) . '/../';
+my $include          = YAML::PP::Schema::Include->new(paths => ($root_project_dir));
+my $ypp              = YAML::PP->new(schema => ['Core', $include, 'Merge']);
+$include->yp($ypp);
 
 sub parse_vars {
     my ($schedule) = shift;
@@ -46,7 +50,16 @@ sub parse_schedule {
     my ($schedule) = shift;
     my @scheduled;
     for my $module (@{$schedule->{schedule}}) {
-        push(@scheduled, $module) && next unless ($module =~ s/\{\{(.*)\}\}/$1/);
+        push(@scheduled, parse_schedule_module($schedule, $module));
+
+    }
+    return @scheduled;
+}
+
+sub parse_schedule_module {
+    my ($schedule, $module) = @_;
+    my @scheduled;
+    if ($module =~ s/\{\{(.*)\}\}/$1/) {
         # Module is scheduled conditionally. Need to be parsed. Get condition hash
         my $condition = $schedule->{conditional_schedule}->{$module};
         # Iterate over variables in the condition
@@ -54,8 +67,11 @@ sub parse_schedule {
             next unless my $val = get_var($var);
             # If value of the variable matched the conditions
             # Iterate over the list of the modules to be loaded
-            push(@scheduled, $_) for (@{$condition->{$var}->{$val}});
+            push(@scheduled, parse_schedule_module($schedule, $_)) for (@{$condition->{$var}->{$val}});
         }
+    }
+    else {
+        push(@scheduled, $module);
     }
     return @scheduled;
 }
@@ -70,6 +86,24 @@ sub get_test_suite_data {
     return $test_suite_data;
 }
 
+=head2 expand_test_data_vars
+
+Expand test suite data variables
+
+=cut
+
+sub expand_test_data_vars {
+    my ($node) = shift;
+    if (ref $node eq 'HASH') {
+        $_ = expand_test_data_vars($_) foreach values %$node;
+    } elsif (ref $node eq 'ARRAY') {
+        $_ = expand_test_data_vars($_) foreach (@$node);
+    } else {
+        $node =~ s/%(.*?)%/get_var($1,'')/eg if $node;
+    }
+    return $node;
+}
+
 =head2 parse_test_suite_data
 
 Parse test data from the yaml file which contains data used in the tests which could be located
@@ -80,22 +114,20 @@ in the same file than the schedule or in a dedicated file only for data.
 sub parse_test_suite_data {
     my ($schedule) = shift;
     $test_suite_data = {};
-
-    # if test_data section is defined in schedule file
     if (exists $schedule->{test_data}) {
-        # import test data using !include from test_data section in schedule file
-        _import_test_data_included($schedule->{test_data});
-
-        # test_data from schedule file has priority over included data
         $test_suite_data = {%$test_suite_data, %{$schedule->{test_data}}};
     }
-
     # import test data directly from data file
     if (my $yamlfile = get_var('YAML_TEST_DATA')) {
-        # test data from data file has priority over test_data from schedule
-        _import_test_data_from_yaml(path => $yamlfile, allow_included => 1);
+        my $include_yaml = $ypp->load_file($root_project_dir . $yamlfile);
+        # latest included data has priority over previous included data
+        $test_suite_data = {%$test_suite_data, %{$include_yaml}};
     }
-    diag(Dumper($test_suite_data));
+    expand_test_data_vars($test_suite_data);
+    local $Data::Dumper::Terse = 1;
+    my $out = Dumper($test_suite_data);
+    chomp($out);
+    diag("parse_test_suite_data: $out");
 }
 
 =head2 load_yaml_schedule
@@ -106,53 +138,17 @@ Parse variables and test modules from a yaml file representing a test suite to b
 
 sub load_yaml_schedule {
     if (my $yamlfile = get_var('YAML_SCHEDULE')) {
-        my $schedule      = YAML::Tiny::LoadFile(dirname(__FILE__) . '/../' . $yamlfile);
-        my %schedule_vars = parse_vars($schedule);
+        my $schedule              = $ypp->load_file($root_project_dir . $yamlfile);
+        my %schedule_vars         = parse_vars($schedule);
+        my $test_context_instance = undef;
         while (my ($var, $value) = each %schedule_vars) { set_var($var, $value) }
         my @schedule_modules = parse_schedule($schedule);
         parse_test_suite_data($schedule);
-        loadtest($_) for (@schedule_modules);
+        $test_context_instance = get_var('TEST_CONTEXT')->new() if defined get_var('TEST_CONTEXT');
+        loadtest($_, run_args => $test_context_instance) for (@schedule_modules);
         return 1;
     }
     return 0;
-}
-
-sub _import_test_data_included {
-    my ($test_data) = shift;
-
-    if (defined(my $import = $test_data->{$include_tag})) {
-        # Allow both lists and scalar value for import "!include" key
-        if (ref $import eq 'ARRAY') {
-            for my $include (@{$import}) {
-                _import_test_data_from_yaml(path => $include);
-            }
-        }
-        else {
-            _import_test_data_from_yaml(path => $import);
-        }
-        delete $test_data->{$include_tag};
-    }
-}
-
-sub _ensure_include_not_present {
-    my ($include_yaml) = shift;
-    if (exists $include_yaml->{$include_tag}) {
-        die "Error: please define in the file only the content of your test_data," .
-          " without including tag $include_tag\n";
-    }
-}
-
-sub _import_test_data_from_yaml {
-    my (%args) = @_;
-
-    my $include_yaml = YAML::Tiny::LoadFile(dirname(__FILE__) . '/../' . $args{path});
-    if ($args{allow_included}) {
-        # import test data using !include from test data file
-        _import_test_data_included($include_yaml);
-    }
-    _ensure_include_not_present($include_yaml);
-    # latest included data has priority over previous included data
-    $test_suite_data = {%$test_suite_data, %{$include_yaml}};
 }
 
 1;

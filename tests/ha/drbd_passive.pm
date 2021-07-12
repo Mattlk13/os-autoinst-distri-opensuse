@@ -7,6 +7,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: drbd-utils crmsh
 # Summary: DRBD active/passive OpenQA test
 # Create DRBD device
 # Create crm ressource
@@ -74,11 +75,11 @@ sub run {
         assert_script_run "sed -i 's/%ADDR_NODE_02%/$node_02_ip/g' $drbd_rsc_file";
 
         # Note: we use ';' instead of '/' as the sed separator because of UNIX file names
-        assert_script_run "sed -i 's;%DRBD_LUN_01%;$drbd_lun_01;g' $drbd_rsc_file";
-        assert_script_run "sed -i 's;%DRBD_LUN_02%;$drbd_lun_02;g' $drbd_rsc_file";
+        assert_script_run "sed -i 's;%DRBD_LUN_01%;\"$drbd_lun_01\";g' $drbd_rsc_file";
+        assert_script_run "sed -i 's;%DRBD_LUN_02%;\"$drbd_lun_02\";g' $drbd_rsc_file";
 
         # Show the result
-        type_string "cat $drbd_rsc_file\n";
+        enter_cmd "cat $drbd_rsc_file";
 
         # We need to add the configuration in csync2.conf
         add_file_in_csync(value => '/etc/drbd*');

@@ -1,13 +1,14 @@
 # SUSE's openQA tests
 #
 # Copyright © 2009-2013 Bernhard M. Wiedemann
-# Copyright © 2012-2019 SUSE LLC
+# Copyright © 2012-2020 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: MozillaFirefox
 # Summary: Case#1479189: Firefox: Add-ons - Extensions
 # - Launch xterm, kill firefox, cleanup previous firefox configuration, launch
 # firefox
@@ -27,6 +28,7 @@ use warnings;
 use base "x11test";
 use testapi;
 use version_utils 'is_sle';
+use utils 'assert_and_click_until_screen_change';
 
 sub run {
     my ($self) = @_;
@@ -37,32 +39,36 @@ sub run {
     send_key "ctrl-shift-a";
     assert_screen('firefox-addons_manager', 90);
     assert_and_click "firefox-extensions";
-    for (1 .. 5) {
-        assert_and_click 'firefox-searchall-addon';
-        type_string "flagfox\n";
-        assert_and_click 'firefox-extensions-flagfox';
-        wait_still_screen 3;
-        assert_and_click 'firefox-extensions-add-to-firefox';
-        wait_still_screen 3;
-        assert_screen 'firefox-extensions-confirm-add';
-        send_key 'alt-a';
-        wait_still_screen 3;
-        assert_and_click 'firefox-extensions-added';
-        wait_still_screen 3;
-        assert_and_click 'firefox-extensions-flagfox-tab';
-        # close the flagfox relase notes tab and flagfox search tab
-        send_key_until_needlematch 'firefox-addons-plugins', 'ctrl-w', 3, 3;
-        # refresh the page to see addon buttons
-        send_key_until_needlematch 'firefox-extensions-flagfox_installed', 'f5', 5, 5;
-        last if check_screen 'firefox-extensions-flagfox_installed';
+    assert_and_click 'firefox-searchall-addon';
+    enter_cmd "flagfox";
+    wait_still_screen 2, 4;
+    assert_and_click 'firefox-extensions-flagfox';
+    wait_still_screen 3;
+    assert_screen [qw(firefox-extensions-add-to-firefox firefox-extensions-flagfox)], timeout => 120;
+    if (match_has_tag('firefox-extensions-add-to-firefox')) {
+        assert_and_click_until_screen_change('firefox-extensions-add-to-firefox', 5, 5);
     }
+    else {
+        send_key_until_needlematch 'firefox-extensions-flagfox', 'f5', 5, 5;
+        assert_and_click 'firefox-extensions-flagfox', 60;
+        wait_still_screen 3;
+        assert_and_click_until_screen_change('firefox-extensions-add-to-firefox', 5, 5);
+    }
+    wait_still_screen 3;
+    assert_and_click 'firefox-extensions-confirm-add', 60;
+    assert_and_click 'firefox-extensions-added',       60;
+    assert_and_click 'firefox-extensions-flagfox-tab', 60;
+    # close the flagfox relase notes tab and flagfox search tab
+    send_key_until_needlematch 'firefox-addons-plugins', 'ctrl-w', 3, 3;
+    # refresh the page to see addon buttons
+    send_key_until_needlematch 'firefox-extensions-flagfox_installed', 'f5', 5, 5;
 
     send_key "alt-1";
     $self->firefox_open_url('opensuse.org');
     assert_screen('firefox-extensions-show_flag');
 
     send_key "alt-2";
-    wait_still_screen 3;
+    wait_still_screen 2, 4;
     assert_and_click('firefox-extensions-menu-icon') if check_screen('firefox-extensions-menu-icon');
     assert_and_click('firefox-extensions-remove');
     wait_still_screen 2, 4;

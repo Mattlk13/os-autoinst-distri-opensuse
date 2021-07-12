@@ -1,10 +1,11 @@
-# Copyright (C) 2018 SUSE LLC
+# Copyright (C) 2018-2020 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: util-linux-systemd rsyslog
 # Summary: Check for syslog daemon
 # - Run "logger Test Log Message FOOBAR123"
 # - Check if syslog-ng is installed
@@ -23,7 +24,8 @@ use utils;
 use version_utils;
 
 sub run {
-    select_console 'root-console';
+    my $self = shift;
+    $self->select_serial_terminal;
 
     my $test_log_msg = 'Test Log Message FOOBAR123';
     assert_script_run "logger $test_log_msg";

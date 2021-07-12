@@ -1,41 +1,40 @@
-table_type: msdos
-partition_table_disk: sda
+---
 disks:
-  - name: sda 
+  - name: sda
+    table_type: msdos
     allowed_unpartitioned: 0.00GB
     partitions:
-      - size: 8Mib
+      - name: sda1
+        size: 8M
         role: raw-volume
         id: prep-boot
         partition_type: primary
-        validation_flag: 0
-      - size: 20000Mib
+      - name: sda2
+        size: 19.5G
         role: operating-system
         partition_type: primary
-        validation_flag: 1
         formatting_options:
           should_format: 1
           filesystem: xfs
         mounting_options:
           should_mount: 1
-          mount_point: '/'
-      - size: 12000Mib
+          mount_point: /
+      - name: sda3
+        size: 11.7G
         role: data
         partition_type: primary
-        validation_flag: 1
         formatting_options:
           should_format: 1
           filesystem: xfs
         mounting_options:
           should_mount: 1
-          mount_point: '/home'
-      - size: max
+          mount_point: /home
+      - name: sda4
         role: swap
         partition_type: primary
-        validation_flag: 0
         formatting_options:
           should_format: 1
           filesystem: swap
         mounting_options:
           should_mount: 1
-          mount_point: '[SWAP]'
+          mount_point: SWAP

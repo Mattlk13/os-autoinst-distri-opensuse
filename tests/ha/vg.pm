@@ -7,6 +7,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: lvm2
 # Summary: Create clustered LVM in HA tests
 # Maintainer: Loic Devulder <ldevulder@suse.com>
 
@@ -47,7 +48,7 @@ sub run {
         $vg_luns  = "/dev/$resource" if is_node(1);
     }
     else {
-        $vg_luns = get_lun . ' ' . get_lun if is_node(1);
+        $vg_luns = '"' . get_lun . '" "' . get_lun . '"' if is_node(1);
     }
     my $vg_name = "vg_$resource";
 

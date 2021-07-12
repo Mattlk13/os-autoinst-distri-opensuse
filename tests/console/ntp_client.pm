@@ -1,10 +1,11 @@
-# Copyright (C) 2018 SUSE LLC
+# Copyright (C) 2018-2021 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: chrony ntp
 # Summary: Check for NTP clients
 # Maintainer: Dominik Heidler <dheidler@suse.de>
 
@@ -13,11 +14,20 @@ use strict;
 use warnings;
 use testapi;
 use utils;
+use version_utils 'is_sle';
 
 sub run {
-    select_console 'root-console';
+    my $self = shift;
+    $self->select_serial_terminal;
 
     assert_script_run 'timedatectl';
+
+    if (is_sle) {
+        systemctl 'enable chronyd';
+        systemctl 'start chronyd';
+        # bsc#1179022 avoid '503 No such source' error while chrony does pick responding sources after start
+        script_run qq(timeout 85 bash -c 'until chronyc activity|grep "0 sources doing burst.*online"; do sleep 1; echo "waiting for ntp sources response"; done' -k);
+    }
 
     # ensure that ntpd is neither installed nor enabled nor active
     systemctl 'is-active ntpd',  expect_false => 1;
@@ -35,8 +45,12 @@ sub run {
     systemctl 'is-enabled chronyd';
     systemctl 'is-active chronyd';
     systemctl 'status chronyd';
-    assert_script_run 'chronyc tracking';
     assert_script_run 'chronyc sources';
+    assert_script_run 'chronyc tracking';
+    assert_script_run 'chronyc makestep';
+    assert_script_run 'chronyc tracking';
+    assert_script_run 'chronyc waitsync 40 0.01', 400;
+    assert_script_run 'chronyc tracking';
 }
 
 1;

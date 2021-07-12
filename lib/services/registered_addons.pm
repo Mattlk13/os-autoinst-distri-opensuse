@@ -22,7 +22,7 @@ use registration 'get_addon_fullname';
 use Mojo::JSON;
 use List::MoreUtils 'uniq';
 
-our @addons;
+my @addons;
 
 sub suseconnect_ls {
     my ($search) = @_;
@@ -33,6 +33,7 @@ sub suseconnect_ls {
 sub check_registered_system {
     my ($system) = @_;
     my $pro = uc get_var('SLE_PRODUCT');
+    $pro = 'SLE_' . $pro if ($pro eq 'HPC');
     suseconnect_ls($pro);
     my $ver = $system =~ s/\-SP/./r;
     script_run("SUSEConnect -s | grep " . $ver);
@@ -41,12 +42,14 @@ sub check_registered_system {
 sub check_registered_addons {
     my ($addonlist) = @_;
     $addonlist //= get_var('SCC_ADDONS');
-    my @addons        = grep { defined $_ && $_ } split(/,/, $addonlist);
-    my @unique_addons = uniq @addons;
+    my @my_addons     = grep { defined $_ && $_ } split(/,/, $addonlist);
+    my @unique_addons = uniq @my_addons;
     foreach my $addon (@unique_addons) {
         $addon =~ s/(^\s+|\s+$)//g;
         my $name = get_addon_fullname($addon);
-        $name = 'LTSS' if ($name =~ /LTSS/);
+        $name = 'LTSS'          if ($name =~ /LTSS/);
+        $name = 'SLE_HPC-ESPOS' if ($name =~ /ESPOS/);
+        next if ($name eq '');
         suseconnect_ls($name);
     }
 }
@@ -63,6 +66,7 @@ sub check_upgraded_addons {
 sub check_suseconnect {
     my $output = script_output("SUSEConnect -s", 120);
     my @out    = grep { $_ =~ /identifier/ } split(/\n/, $output);
+    @addons = ();
     if (@out) {
         my $json = Mojo::JSON::decode_json($out[0]);
         foreach (@$json) {
@@ -78,10 +82,24 @@ sub check_suseconnect {
     diag "@addons";
 }
 
+sub check_suseconnect_cmd {
+    my $ls_out = script_output("SUSEConnect --list-extensions", 120);
+    diag "$ls_out";
+    my $status_out = script_output("SUSEConnect --status-text", 120);
+    diag "$status_out";
+    for (my $i = 0; $i < @addons; $i = $i + 1) {
+        next if ($addons[$i] =~ /^SLE(S|D|_HPC)$/);
+        diag "$addons[$i]";
+        die "$addons[$i] is not existed at SUSEConnect --list-extensions" if ($ls_out     !~ /Deactivate(.*)$addons[$i]/);
+        die "$addons[$i] is not existed at SUSEConnect --status-text"     if ($status_out !~ /$addons[$i]/);
+    }
+}
+
 sub full_registered_check {
-    my ($stage) = @_;
-    $stage //= '';
+    my (%hash) = @_;
+    my $stage = $hash{stage};
     check_suseconnect();
+    check_suseconnect_cmd();
     if ($stage eq 'before') {
         check_registered_system(get_var('ORIGIN_SYSTEM_VERSION'));
         check_registered_addons();

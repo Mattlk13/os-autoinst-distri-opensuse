@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright © 2018 SUSE LLC
+# Copyright © 2018-2021 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -24,12 +24,14 @@ sub run {
     assert_and_click "windows-powershell-admin";
     assert_and_click "windows-powershell-yes";
 
+    assert_and_click "powershell-started", timeout => 120;
     type_string "netsh interface ip set address name=Ethernet static 10.0.2.18 255.255.255.0 10.0.2.2";
     send_key "ret";
 
     assert_screen "network-allow-discovered";
     assert_and_click "network-discovered-yes";
 
+    sleep 5;
     type_string "netsh interface ip set dns Ethernet static 10.67.0.2";
     send_key "ret";
 

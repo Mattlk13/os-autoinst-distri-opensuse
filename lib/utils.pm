@@ -1,4 +1,4 @@
-# Copyright (C) 2015-2020 SUSE LLC
+# Copyright (C) 2015-2021 SUSE LLC
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -23,9 +23,10 @@ use warnings;
 use testapi qw(is_serial_terminal :DEFAULT);
 use lockapi 'mutex_wait';
 use mm_network;
-use version_utils qw(is_caasp is_leap is_sle is_sle12_hdd_in_upgrade is_storage_ng is_jeos);
+use version_utils qw(is_microos is_leap is_sle is_sle12_hdd_in_upgrade is_storage_ng is_jeos);
 use Utils::Architectures qw(is_aarch64 is_ppc64le);
 use Utils::Systemd qw(systemctl disable_and_stop_service);
+use Utils::Backends 'has_ttys';
 use Mojo::UserAgent;
 
 our @EXPORT = qw(
@@ -34,6 +35,8 @@ our @EXPORT = qw(
   type_string_slow
   type_string_very_slow
   type_string_slow_extended
+  enter_cmd_slow
+  enter_cmd_very_slow
   save_svirt_pty
   type_line_svirt
   integration_services_check
@@ -53,7 +56,7 @@ our @EXPORT = qw(
   is_bridged_networking
   set_bridged_networking
   assert_screen_with_soft_timeout
-  pkcon_quit
+  quit_packagekit
   systemctl
   addon_decline_license
   addon_license
@@ -66,10 +69,10 @@ our @EXPORT = qw(
   handle_untrusted_gpg_key
   service_action
   assert_gui_app
-  run_scripted_command_slow
   get_root_console_tty
   get_x11_console_tty
   OPENQA_FTP_URL
+  IN_ZYPPER_CALL
   arrays_differ
   arrays_subset
   ensure_serialdev_permissions
@@ -79,13 +82,23 @@ our @EXPORT = qw(
   reconnect_mgmt_console
   set_hostname
   show_tasks_in_blocked_state
+  show_oom_info
   svirt_host_basedir
-  prepare_ssh_localhost_key_login
   disable_serial_getty
   script_retry
   script_run_interactive
   create_btrfs_subvolume
+  create_raid_loop_device
   file_content_replace
+  ensure_ca_certificates_suse_installed
+  is_efi_boot
+  install_patterns
+  common_service_action
+  script_output_retry
+  get_secureboot_status
+  assert_secureboot_status
+  susefirewall2_to_firewalld
+  permit_root_ssh
 );
 
 =head1 SYNOPSIS
@@ -107,7 +120,8 @@ use constant VERY_SLOW_TYPING_SPEED => 4;
 # openQA internal ftp server url
 our $OPENQA_FTP_URL = "ftp://openqa.suse.de";
 
-my $svirt_pty_saved = 0;
+# set flag IN_ZYPPER_CALL in zypper_call and unset when leaving
+our $IN_ZYPPER_CALL = 0;
 
 =head2 save_svirt_pty
 
@@ -122,8 +136,8 @@ Does B<not> work on B<Hyper-V>.
 sub save_svirt_pty {
     return if check_var('VIRSH_VMM_FAMILY', 'hyperv');
     my $name = console('svirt')->name;
-    type_string "pty=`virsh dumpxml $name 2>/dev/null | grep \"console type=\" | sed \"s/'/ /g\" | awk '{ print \$5 }'`\n";
-    type_string "echo \$pty\n";
+    enter_cmd "pty=`virsh dumpxml $name 2>/dev/null | grep \"console type=\" | sed \"s/'/ /g\" | awk '{ print \$5 }'`";
+    enter_cmd "echo \$pty";
 }
 
 =head2 type_line_svirt
@@ -137,7 +151,7 @@ If the expected text is not found, it will fail with C<$fail_message>.
 =cut
 sub type_line_svirt {
     my ($string, %args) = @_;
-    type_string "echo $string > \$pty\n";
+    enter_cmd "echo $string > \$pty";
     if ($args{expect}) {
         wait_serial($args{expect}, $args{timeout}) || die $args{fail_message} // 'expected \'' . $args{expect} . '\' not found';
     }
@@ -198,11 +212,11 @@ If yes, import the key, otherwise don't.
 sub handle_untrusted_gpg_key {
     if (match_has_tag('import-known-untrusted-gpg-key')) {
         record_info('Import', 'Known untrusted gpg key is imported');
-        wait_screen_change { send_key 'alt-t' };    # import
+        wait_screen_change { send_key 'alt-t'; send_key 'alt-y' };    # import/yes, depending on variant
     }
     else {
         record_info('Cancel import', 'Untrusted gpg key is NOT imported');
-        wait_screen_change { send_key 'alt-c' };    # cancel
+        wait_screen_change { send_key 'alt-c'; send_key 'spc' };      # cancel/no, depending on variant
     }
 }
 
@@ -215,21 +229,18 @@ Die, if this is not the case.
 
 =cut
 sub integration_services_check_ip {
-    # Workaround for poo#44771 "Can't call method "exec" on an undefined value"
-    select_console('svirt');
-    select_console('sut');
     # Host-side of Integration Services
     my $vmname = console('svirt')->name;
     my $ips_host_pov;
     if (check_var('VIRSH_VMM_FAMILY', 'hyperv')) {
-        $ips_host_pov = console('svirt')->get_cmd_output(
-            'powershell -Command "Get-VM ' . $vmname . ' | Get-VMNetworkAdapter | Format-Table -HideTableHeaders IPAddresses"');
+        (undef, $ips_host_pov) = console('svirt')->run_cmd(
+            'powershell -Command "Get-VM ' . $vmname . ' | Get-VMNetworkAdapter | Format-Table -HideTableHeaders IPAddresses"', wantarray => 1);
     }
     elsif (check_var('VIRSH_VMM_FAMILY', 'vmware')) {
-        $ips_host_pov = console('svirt')->get_cmd_output(
+        (undef, $ips_host_pov) = console('svirt')->run_cmd(
             "set -x; vmid=\$(vim-cmd vmsvc/getallvms | awk '/$vmname/ { print \$1 }');" .
               "if [ \$vmid ]; then vim-cmd vmsvc/get.guest \$vmid | awk '/ipAddress/ {print \$3}' " .
-              "| head -n1 | sed -e 's/\"//g' | sed -e 's/,//g'; fi", {domain => 'sshVMwareServer'});
+              "| head -n1 | sed -e 's/\"//g' | sed -e 's/,//g'; fi", domain => 'sshVMwareServer', wantarray => 1);
     }
     $ips_host_pov =~ m/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/;
     $ips_host_pov = $1;
@@ -250,8 +261,8 @@ are present and in working condition.
 
 =cut
 sub integration_services_check {
+    integration_services_check_ip();
     if (check_var('VIRSH_VMM_FAMILY', 'hyperv')) {
-        integration_services_check_ip;
         # Guest-side of Integration Services
         assert_script_run('rpmquery hyper-v');
         assert_script_run('rpmverify hyper-v');
@@ -269,7 +280,6 @@ sub integration_services_check {
         assert_script_run('systemctl list-unit-files | grep hv_fcopy_daemon.service');
     }
     elsif (check_var('VIRSH_VMM_FAMILY', 'vmware')) {
-        integration_services_check_ip;
         assert_script_run('rpmquery open-vm-tools');
         assert_script_run('rpmquery open-vm-tools-desktop') unless check_var('DESKTOP', 'textmode');
         assert_script_run('modinfo vmw_vmci');
@@ -318,7 +328,14 @@ sub unlock_if_encrypted {
         assert_screen("encrypted-disk-password-prompt", 200);
         type_password;    # enter PW at boot
         save_screenshot;
-        assert_screen 'encrypted_disk-typed_password' if $args{check_typed_password};
+        if ($args{check_typed_password}) {
+            unless (check_screen "encrypted_disk-typed_password", 30) {
+                record_info("Invalid password", "Not all password characters were typed successfully, retyping");
+                send_key "backspace" for (0 .. 9);
+                type_password;
+                assert_screen "encrypted_disk-typed_password";
+            }
+        }
         send_key "ret";
     }
 }
@@ -333,7 +350,7 @@ So this function will simply type C<clear\n>.
 
 =cut
 sub clear_console {
-    type_string "clear\n";
+    enter_cmd "clear";
 }
 
 =head2 assert_gui_app
@@ -384,8 +401,9 @@ sub check_console_font {
     # Does not make sense on ssh-based consoles
     return if get_var('BACKEND', '') =~ /ipmi|spvm|pvm_hmc/;
     # we do not await the console here, as we have to expect the font to be broken
-    # for the needle to match
-    select_console('root-console', await_console => 0);
+    # for the needle to match, for migration, need wait root console
+    my $flavor = get_var('FLAVOR');
+    select_console('root-console', await_console => ($flavor =~ /Migration/) ? 1 : 0);
 
     # if this command failed, we're not in a console (e.g. in a svirt
     # ssh connection) and don't see the console font but the local
@@ -454,6 +472,34 @@ sub type_string_very_slow {
     }
 }
 
+=head2 enter_cmd_slow
+
+ enter_cmd_slow($cmd);
+
+Enter a command with C<SLOW_TYPING_SPEED> to avoid losing keys.
+
+=cut
+sub enter_cmd_slow {
+    my ($cmd) = @_;
+
+    enter_cmd $cmd, SLOW_TYPING_SPEED;
+}
+
+=head2 enter_cmd_very_slow
+
+ enter_cmd_very_slow($cmd);
+
+Enter a command even slower with C<VERY_SLOW_TYPING_SPEED>. Compare to
+C<type_string_very_slow>.
+
+=cut
+sub enter_cmd_very_slow {
+    my ($cmd) = @_;
+
+    enter_cmd $cmd, VERY_SLOW_TYPING_SPEED;
+    wait_still_screen(1, 3);
+}
+
 
 =head2 get_netboot_mirror
 
@@ -489,25 +535,32 @@ sub zypper_call {
     my $command          = shift;
     my %args             = @_;
     my $allow_exit_codes = $args{exitcode} || [0];
-    my $timeout          = $args{timeout} || 700;
+    my $timeout          = $args{timeout}  || 700;
     my $log              = $args{log};
     my $dumb_term        = $args{dumb_term} // is_serial_terminal;
 
     my $printer = $log ? "| tee /tmp/$log" : $dumb_term ? '| cat' : '';
     die 'Exit code is from PIPESTATUS[0], not grep' if $command =~ /^((?!`).)*\| ?grep/;
 
+    $IN_ZYPPER_CALL = 1;
     # Retrying workarounds
     my $ret;
+    my $search_conflicts = 'awk \'BEGIN {print "Processing conflicts - ",NR; group=0}
+                    /Solverrun finished with an ERROR/,/statistics/{ print group"|",
+                    $0; if ($0 ~ /statistics/ ){ print "EOL"; group++ }; }\'\
+                    /var/log/zypper.log
+                    ';
     for (1 .. 5) {
         $ret = script_run("zypper -n $command $printer; ( exit \${PIPESTATUS[0]} )", $timeout);
         die "zypper did not finish in $timeout seconds" unless defined($ret);
         if ($ret == 4) {
-            if ($command =~ /^in.*java-\*$/ && script_run('grep "do not install java-" /var/log/zypper.log') == 0) {
-                record_soft_failure 'bsc#1137466';
-                last;
-            }
             if (script_run('grep "Error code.*502" /var/log/zypper.log') == 0) {
                 die 'According to bsc#1070851 zypper should automatically retry internally. Bugfix missing for current product?';
+            } elsif (script_run('grep "Solverrun finished with an ERROR" /var/log/zypper.log') == 0) {
+                my $conflicts = script_output($search_conflicts);
+                record_info("Conflict", $conflicts, result => 'fail');
+                diag "Package conflicts found, not retrying anymore" if $conflicts;
+                last;
             }
             next unless get_var('FLAVOR', '') =~ /-(Updates|Incidents)$/;
         }
@@ -526,8 +579,20 @@ sub zypper_call {
 
     unless (grep { $_ == $ret } @$allow_exit_codes) {
         upload_logs('/var/log/zypper.log');
-        die "'zypper -n $command' failed with code $ret";
+        my $msg = "'zypper -n $command' failed with code $ret";
+        if ($ret == 104) {
+            $msg .= " (ZYPPER_EXIT_INF_CAP_NOT_FOUND)\n\nRelated zypper logs:\n";
+            script_run('tac /var/log/zypper.log | grep -F -m1 -B10000 "Hi, me zypper" | tac | grep \'\(SolverRequester.cc\|THROW\|CAUGHT\)\' > /tmp/z104.txt');
+            $msg .= script_output('cat /tmp/z104.txt');
+        }
+        else {
+            script_run('tac /var/log/zypper.log | grep -F -m1 -B10000 "Hi, me zypper" | tac | grep \'Exception.cc\' > /tmp/zlog.txt');
+            $msg .= "\n\nRelated zypper logs:\n";
+            $msg .= script_output('cat /tmp/zlog.txt');
+        }
+        die $msg;
     }
+    $IN_ZYPPER_CALL = 0;
     return $ret;
 }
 
@@ -579,14 +644,16 @@ sub zypper_ar {
     my $params       = $args{params}       // '';
     my $no_gpg_check = $args{no_gpg_check} // '';
 
-    $priority     = defined($priority) ? "-p $priority"  : "";
-    $no_gpg_check = $no_gpg_check      ? "--no-gpgcheck" : "";
-    my $cmd_ar  = "--gpg-auto-import-keys ar -f $priority $no_gpg_check $params $url";
+    $no_gpg_check = $no_gpg_check ? "--no-gpgcheck" : "";
+    my $prioarg = defined($priority) && !is_sle('<=12') ? "-p $priority" : "";
+    my $cmd_ar  = "--gpg-auto-import-keys ar -f $prioarg $no_gpg_check $params $url";
+    my $cmd_mr  = "mr -p $priority $url";
     my $cmd_ref = "--gpg-auto-import-keys ref";
 
     # repo file
     if (!$name) {
         zypper_call($cmd_ar);
+        zypper_call($cmd_mr) if $priority && is_sle('<12');
         return zypper_call($cmd_ref);
     }
 
@@ -594,6 +661,7 @@ sub zypper_ar {
     my $out = script_output("LC_ALL=C zypper lr $name 2>&1", proceed_on_failure => 1);
     if ($out =~ /Repository.*$name.*not found/i) {
         zypper_call("$cmd_ar $name");
+        zypper_call($cmd_mr) if $priority && is_sle('<12');
         return zypper_call("$cmd_ref --repo $name");
     }
 }
@@ -607,16 +675,30 @@ the second run will update the system.
 
 =cut
 sub fully_patch_system {
-    # first run, possible update of packager -- exit code 103
-    zypper_call('patch --with-interactive -l', exitcode => [0, 102, 103], timeout => 3000);
-    # workround for 11-SP4 s390 bsc#1155544
+    # special handle for 11-SP4 s390 install
     if (is_sle('=11-SP4') && check_var('ARCH', 's390x') && check_var('BACKEND', 's390x')) {
-        record_soft_failure 'bsc#1155544';
+        # first run, possible update of packager -- exit code 103
+        zypper_call('patch --with-interactive -l', exitcode => [0, 102, 103], timeout => 3000);
         handle_patch_11sp4_zvm();
-    } else {
-        # second run, full system update
-        zypper_call('patch --with-interactive -l', exitcode => [0, 102], timeout => 6000);
+        return;
     }
+
+    # Repeatedly call zypper patch until it returns something other than 103 (package manager updates)
+    my $ret = 1;
+    for (1 .. 3) {
+        $ret = zypper_call('patch --with-interactive -l', exitcode => [0, 4, 102, 103], timeout => 6000);
+        last if $ret != 103;
+    }
+
+    if (($ret == 4) && is_sle('>=12') && is_sle('<15')) {
+        record_soft_failure 'bsc#1176655 openQA test fails in patch_sle - binutils-devel-2.31-9.29.1.aarch64 requires binutils = 2.31-9.29.1';
+        my $para = '';
+        $para = '--force-resolution' if get_var('FORCE_DEPS');
+        $ret  = zypper_call("patch --with-interactive -l $para", exitcode => [0, 102], timeout => 6000);
+        save_screenshot;
+    }
+
+    die "Zypper failed with $ret" if ($ret != 0 && $ret != 102);
 }
 
 =head2 ssh_fully_patch_system
@@ -830,7 +912,7 @@ sub handle_livecd_reboot_failure {
     if (match_has_tag('generic-desktop-after_installation')) {
         record_soft_failure 'boo#993885 Kde-Live net installer does not reboot after installation';
         select_console 'install-shell';
-        type_string "reboot\n";
+        enter_cmd "reboot";
         save_screenshot;
     }
 }
@@ -871,15 +953,15 @@ sub assert_screen_with_soft_timeout {
     return assert_screen $mustmatch, $args{timeout} - $args{soft_timeout};
 }
 
-=head2 pkcon_quit
+=head2 quit_packagekit
 
- pkcon_quit();
+ quit_packagekit();
 
 Stop and mask packagekit service and wait until it is really dead.
 This is needed to prevent access conflicts to the RPM database.
 
 =cut
-sub pkcon_quit {
+sub quit_packagekit {
     script_run("systemctl mask packagekit; systemctl stop packagekit; while pgrep packagekitd; do sleep 1; done");
 }
 
@@ -894,7 +976,7 @@ sub addon_decline_license {
         if (check_screen 'next-button-is-active', 5) {
             send_key $cmd{next};
             assert_screen "license-refuse";
-            send_key 'alt-n';    # no, don't refuse agreement
+            send_key 'alt-n';         # no, don't refuse agreement
             wait_still_screen 2;
             send_key $cmd{accept};    # accept license
         }
@@ -1000,13 +1082,17 @@ some basic logging information to the serial output.
 sub handle_emergency {
     if (match_has_tag('emergency-shell')) {
         # get emergency shell logs for bug, scp doesn't work
+        type_password;
+        send_key 'ret';
         script_run "cat /run/initramfs/rdsosreport.txt > /dev/$serialdev";
+        script_run "echo \"\n--------------Beginning of journalctl--------------\n\" > /dev/$serialdev";
+        script_run "journalctl --no-pager -o short-precise > /dev/$serialdev";
         die "hit emergency shell";
     }
     elsif (match_has_tag('emergency-mode')) {
         type_password;
         send_key 'ret';
-        script_run "journalctl --no-pager > /dev/$serialdev";
+        script_run "journalctl --no-pager -o short-precise > /dev/$serialdev";
         die "hit emergency mode";
     }
 }
@@ -1036,48 +1122,6 @@ sub service_action {
     }
 }
 
-=head2 run_scripted_command_slow
-
- run_scripted_command_slow($cmd [, slow_type => <num>]);
-
-Type slowly to run very long command in scripted way to avoid issue of 'key event queue full' (see poo#12250).
-Pass optional slow_type key to control how slow to type the command.
-Scripted very long command to shorten typing length.
-Default slow_type is type_string_slow.
-
-=cut
-sub run_scripted_command_slow {
-    my ($cmd, %args) = @_;
-    my $suffix = hashed_string("SO$cmd");
-
-    open(my $fh, '>', 'current_script');
-    print $fh $cmd;
-    close $fh;
-
-    my $slow_type   = $args{slow_type} // 1;
-    my $curl_script = "curl -f -v " . autoinst_url("/current_script") . " > /tmp/script$suffix.sh" . " ; echo curl-\$? > /dev/$testapi::serialdev\n";
-    my $exec_script = "/bin/bash -x /tmp/script$suffix.sh" . " ; echo script$suffix-\$? > /dev/$testapi::serialdev\n";
-    if ($slow_type == 1) {
-        type_string_slow $curl_script;
-        wait_serial "curl-0" || die "Command $curl_script died";
-        type_string_slow $exec_script;
-        wait_serial "script$suffix-0" || die "Command $exec_script died";
-    }
-    elsif ($slow_type == 2) {
-        type_string_very_slow $curl_script;
-        wait_serial "curl-0" || die "Command $curl_script died";
-        type_string_very_slow $exec_script;
-        wait_serial "script$suffix-0" || die "Command $exec_script died";
-    }
-    elsif ($slow_type == 3) {
-        type_string $curl_script, wait_screen_change => 1;
-        wait_serial "curl-0" || die "Command $curl_script died";
-        type_string $exec_script, wait_screen_change => 1;
-        wait_serial "script$suffix-0" || die "Command $exec_script died";
-    }
-    clear_console;
-}
-
 =head2 get_root_console_tty
 
  get_root_console_tty();
@@ -1089,7 +1133,7 @@ openSUSE distris, except for Xen PV (bsc#1086243).
 
 =cut
 sub get_root_console_tty {
-    return (!is_sle('<15') && !is_caasp && !check_var('VIRSH_VMM_TYPE', 'linux')) ? 6 : 2;
+    return (!is_sle('<15') && !is_microos && !check_var('VIRSH_VMM_TYPE', 'linux')) ? 6 : 2;
 }
 
 =head2 get_x11_console_tty
@@ -1106,18 +1150,16 @@ sub get_x11_console_tty {
     my $new_gdm
       = !is_sle('<15')
       && !is_leap('<15.0')
-      && !is_caasp
+      && !is_microos
       && !check_var('VIRSH_VMM_FAMILY', 'hyperv')
       && !check_var('VIRSH_VMM_TYPE',   'linux')
       && !get_var('VERSION_LAYERED');
     # $newer_gdm means GDM version >= 3.32, which will start gnome desktop
-    # on tty2 including auto-login cases. Also exclude cases which boot from
-    # older versions in HDD
+    # on tty2 including auto-login cases.
     my $newer_gdm
       = $new_gdm
-      && !is_sle('<=15-SP2')
-      && !is_leap('<15.2')
-      && get_var('HDD_1', '') !~ /opensuse-42/;
+      && !is_sle('<15-SP2')
+      && !is_leap('<15.2');
     return (check_var('DESKTOP', 'gnome') && (get_var('NOAUTOLOGIN') || $newer_gdm) && $new_gdm) ? 2 : 7;
 }
 
@@ -1232,7 +1274,7 @@ sub exec_and_insert_password {
     clear_console if !is_serial_terminal();
     type_string "$cmd";
     if (is_serial_terminal()) {
-        type_string " ; echo $hashed_cmd-\$?-\n";
+        enter_cmd " ; echo $hashed_cmd-\$?-";
         wait_serial(qr/Password:\s*$/i);
     }
     else {
@@ -1271,17 +1313,11 @@ sub shorten_url {
 
     my $ua = Mojo::UserAgent->new;
 
-    my $tx = $ua->post('s.qa.suse.de' => form => {url => $url, wishId => $args{wishid}});
-    if (my $res = $tx->success) {
-        return $res->body;
-    }
-    else {
-        my $err = $tx->error;
-        die "Shorten url got $err->{code} response: $err->{message}" if $err->{code};
-        die "Connection error when shorten url: $err->{message}";
-    }
+    my $res = $ua->post('s.qa.suse.de' => form => {url => $url, wishId => $args{wishid}})->result;
+    if    ($res->is_success) { return $res->body }
+    elsif ($res->is_error)   { die "Shorten url got $res->code response: $res->message" }
+    else                     { die "Shorten url failed with unknown error" }
 }
-
 
 =head2 _handle_login_not_found
 
@@ -1322,16 +1358,18 @@ sub _handle_login_not_found {
 
  reconnect_mgmt_console([timeout => $timeout]);
 
-After each reboot we have to reconnect to the management console on remote backends
+After each reboot we have to reconnect to the management console on remote backends.
+C<$timeout> can be set to some specific time and if during reboot GRUB is shown twice C<grub_expected_twice>
+can be set to 1.
 
 =cut
 sub reconnect_mgmt_console {
     my (%args) = @_;
-    $args{timeout} //= 300;
+    $args{timeout}             //= 300;
+    $args{grub_expected_twice} //= 0;
 
     if (check_var('ARCH', 's390x')) {
-        my $login_ready = qr/Welcome to /;
-        $login_ready .= is_sle() ? qr/SUSE Linux Enterprise Server.*\(s390x\)/ : qr/openSUSE Tumbleweed/;
+        my $login_ready = serial_terminal::get_login_message();
         console('installation')->disable_vnc_stalls;
 
         # different behaviour for z/VM and z/KVM
@@ -1356,14 +1394,28 @@ sub reconnect_mgmt_console {
                 wait_serial($login_ready) || diag 'Could not find GRUB screen, continuing nevertheless, trying to boot';
             }
             else {
-                wait_serial('GNU GRUB') || diag 'Could not find GRUB screen, continuing nevertheless, trying to boot';
                 select_console('svirt');
                 save_svirt_pty;
+                if ($args{grub_expected_twice}) {
+                    wait_serial('Press enter to boot the selected OS') ||
+                      diag 'Could not find boot selection, continuing nevertheless, trying to boot';
+                    type_line_svirt '';
+                }
+                wait_serial('GNU GRUB', $args{grub_timeout}) ||
+                  diag 'Could not find GRUB screen, continuing nevertheless, trying to boot';
                 type_line_svirt '', expect => $login_ready, timeout => $args{timeout}, fail_message => 'Could not find login prompt';
             }
         }
 
         if (!check_var('DESKTOP', 'textmode')) {
+            if (check_var("UPGRADE", "1") && is_sle('15+') && is_sle('<15', get_var('HDDVERSION'))) {
+                select_console 'root-console';
+                if (script_run("iptables -S | grep 'A input_ext.*tcp.*dport 59.*-j ACCEPT'", 30) != 0) {
+                    script_run('pkill zypper');
+                    zypper_call("in susefirewall2-to-firewalld");
+                    susefirewall2_to_firewalld();
+                }
+            }
             select_console('x11', await_console => 0);
         }
     }
@@ -1372,13 +1424,25 @@ sub reconnect_mgmt_console {
             select_console 'novalink-ssh', await_console => 0;
         } elsif (check_var('BACKEND', 'pvm_hmc')) {
             select_console 'powerhmc-ssh', await_console => 0;
+            if ($args{grub_expected_twice}) {
+                check_screen 'grub2', 60;
+                wait_screen_change { send_key 'ret' };
+            }
         }
     }
     elsif (check_var('ARCH', 'x86_64')) {
         if (check_var('BACKEND', 'ipmi')) {
             select_console 'sol', await_console => 0;
-            assert_screen [qw(qa-net-selection prague-pxe-menu)], 300;
+            assert_screen([qw(qa-net-selection prague-pxe-menu grub2)], 300);
             # boot to hard disk is default
+            send_key 'ret';
+        }
+    }
+    elsif (check_var('ARCH', 'aarch64')) {
+        if (check_var('BACKEND', 'ipmi')) {
+            select_console 'sol', await_console => 0;
+            # aarch64 baremetal machine takes longer to boot than 5 minutes
+            assert_screen([qw(qa-net-selection prague-pxe-menu grub2)], 600);
             send_key 'ret';
         }
     }
@@ -1399,11 +1463,31 @@ See L<https://github.com/torvalds/linux/blob/master/Documentation/admin-guide/sy
 =cut
 sub show_tasks_in_blocked_state {
     # sending sysrqs doesn't work for svirt
-    if (!check_var('BACKEND', 'svirt')) {
+    if (has_ttys) {
+        send_key 'alt-sysrq-t';
         send_key 'alt-sysrq-w';
         # info will be sent to serial tty
-        wait_serial(qr/sysrq\s*:\s+show\s+blocked\s+state/i, 1);
+        wait_serial(qr/sysrq\s*:\s+show\s+blocked\s+state/i);
         send_key 'ret';    # ensure clean shell prompt
+    }
+}
+
+=head2 show_oom_info
+
+ show_oom_info
+
+Show logs about an out of memory process kill.
+
+=cut
+sub show_oom_info {
+    if (script_run('dmesg | grep "Out of memory"') == 0) {
+        my $oom = script_output('dmesg | grep "Out of memory"', proceed_on_failure => 1);
+        if (has_ttys) {
+            send_key 'alt-sysrq-m';
+            $oom .= "\n\n" . script_output('journalctl -kb | tac | grep -F -m1 -B1000 "sysrq: Show Memory" | tac', proceed_on_failure => 1);
+            $oom .= "\n\n% free -h\n" . script_output('free -h', proceed_on_failure => 1);
+        }
+        record_info('OOM KILL', $oom, result => 'fail');
     }
 }
 
@@ -1416,35 +1500,6 @@ Return C<VIRSH_OPENQA_BASEDIR> or fall back to C</var/lib>.
 =cut
 sub svirt_host_basedir {
     return get_var('VIRSH_OPENQA_BASEDIR', '/var/lib');
-}
-
-=head2 prepare_ssh_localhost_key_login
-
- prepare_ssh_localhost_key_login($source_user);
-
-Add the SSH key of C<$source_user> to the C<.ssh/authorized_keys> file of root.
-
-=cut
-sub prepare_ssh_localhost_key_login {
-    my ($source_user) = @_;
-    # in case localhost is already inside known_hosts
-    if (script_run('test -e ~/.ssh/known_hosts') == 0) {
-        assert_script_run('ssh-keygen -R localhost');
-    }
-
-    # generate ssh key
-    if (script_run('! test -e ~/.ssh/id_rsa') == 0) {
-        assert_script_run('ssh-keygen -t rsa -N "" -f ~/.ssh/id_rsa');
-    }
-
-    # add key to authorized_keys of root
-    if ($source_user eq 'root') {
-        assert_script_run('cat ~/.ssh/id_rsa.pub | tee -a ~/.ssh/authorized_keys');
-    }
-    else {
-        assert_script_sudo('mkdir -p /root/.ssh');
-        assert_script_sudo("cat /home/$source_user/.ssh/id_rsa.pub | tee -a /root/.ssh/authorized_keys");
-    }
 }
 
 =head2 script_retry
@@ -1478,15 +1533,62 @@ sub script_retry {
     my $die     = $args{die}     // 1;
 
     my $ret;
+
+    my $exec = "timeout $timeout $cmd";
+    # Exclamation mark needs to be moved before the timeout command, if present
+    if (substr($cmd, 0, 1) eq "!") {
+        $cmd = substr($cmd, 1);
+        $cmd =~ s/^\s+//;    # left trim spaces after the exclamation mark
+        $exec = "! timeout $timeout $cmd";
+    }
     for (1 .. $retry) {
-        $ret = script_run "timeout " . ($timeout - 3) . " $cmd", $timeout;
+        # timeout for script_run must be larger than for the 'timeout ...' command
+        $ret = script_run($exec, ($timeout + 3));
         last if defined($ret) && $ret == $ecode;
 
         die("Waiting for Godot: $cmd") if $retry == $_ && $die == 1;
-        sleep $delay;
+        sleep $delay                   if ($delay > 0);
     }
 
     return $ret;
+}
+
+=head2 script_output_retry
+
+ script_output_retry($cmd, [retry => $retry], [delay => $delay], [timeout => $timeout], [die => $die]);
+
+Repeat command until expected result or timeout. Return the output of the command on success.
+
+C<$expect> refers to the expected command exit code and defaults to C<0>.
+
+C<$retry> refers to the number of retries and defaults to C<10>.
+
+C<$delay> is the time between retries and defaults to C<30>.
+
+The command must return within C<$timeout> seconds (default: 25).
+
+If the command doesn't return C<$expect> after C<$retry> retries,
+this function will die, if C<$die> is set.
+
+Example:
+
+ script_output_retry('ping -c1 -W1 machine', retry => 5);
+
+=cut
+sub script_output_retry {
+    my ($cmd, %args) = @_;
+    my $retry   = $args{retry}   // 10;
+    my $delay   = $args{delay}   // 30;
+    my $timeout = $args{timeout} // 30;
+    my $die     = $args{die}     // 1;
+
+    my $exec = "timeout " . ($timeout - 3) . " $cmd";
+    for (1 .. $retry) {
+        my $ret = eval { script_output($exec, timeout => $timeout, proceed_on_failure => 0); };
+        return $ret if ($ret);
+        sleep $delay;
+    }
+    die("Waiting for Godot: $cmd") if $die;
 }
 
 =head2 script_run_interactive
@@ -1589,6 +1691,37 @@ sub create_btrfs_subvolume {
     assert_script_run("rm -fr /tmp/arm64-efi/");
 }
 
+=head2 create_raid_loop_device 
+    
+ create_raid_loop_device([raid_type => $raid_type], [device_num => $device_num], [file_size => $file_size]);
+
+Create a raid array over loop devices.
+Raid type is C<$raid_type>, using C<$device_num> number of loop device, 
+with the size of each device being C<$file_size> megabytes.
+
+Example to create a RAID C<5> array over C<3> loop devices, C<200> Mb each:
+    create_raid_loop_device(raid_type => 5, device_num => 3, file_size => 200)
+
+=cut
+sub create_raid_loop_device {
+    my %args         = @_;
+    my $raid_type    = $args{raid_type}  // 1;
+    my $device_num   = $args{device_num} // 2;
+    my $file_size    = $args{file_size}  // 100;
+    my $loop_devices = "";
+
+    for my $num (1 .. $device_num) {
+        my $raid_file = "raid_file" . $num;
+        assert_script_run("fallocate -l ${file_size}M $raid_file");
+
+        my $loop_device = script_output("losetup -f");
+        assert_script_run("losetup $loop_device $raid_file");
+
+        $loop_devices .= $loop_device . " ";
+    }
+
+    assert_script_run("yes|mdadm --create /dev/md/raid_over_loop --level=$raid_type --raid-devices=$device_num $loop_devices");
+}
 
 =head2 file_content_replace
 
@@ -1639,8 +1772,17 @@ sub handle_patch_11sp4_zvm {
     while ($out) {
         if ($out =~ $zypper_patch_conflict) {
             save_screenshot;
-            send_key "3";
-            send_key "ret";
+            if (check_var("BREAK_DEPS", '1')) {
+                send_key "3";
+                send_key "ret";
+            }
+            elsif (check_var("WORKAROUND_DEPS", '1')) {
+                send_key "2";
+                send_key "ret";
+            }
+            else {
+                die 'Dependency problems';
+            }
         }
         elsif ($out =~ $zypper_continue) {
             save_screenshot;
@@ -1675,4 +1817,219 @@ sub assert_file_content {
     my ($param, $value) = @_;
     assert_script_run("cat $param | grep $value");
 }
+
+=head2 ensure_ca_certificates_suse_installed
+    ensure_ca_certificates_suse_installed();
+
+This functions checks if ca-certificates-suse is installed and if it is not it adds the repository and installs it.
+
+=cut
+
+sub ensure_ca_certificates_suse_installed {
+    return unless is_sle;
+    if (script_run('rpm -qi ca-certificates-suse') == 1) {
+        my $distversion = get_required_var("VERSION") =~ s/-SP/_SP/r;    # 15 -> 15, 15-SP1 -> 15_SP1
+        zypper_call("ar --refresh http://download.suse.de/ibs/SUSE:/CA/SLE_$distversion/SUSE:CA.repo");
+        zypper_call("in ca-certificates-suse");
+    }
+}
+
+# non empty */sys/firmware/efi/* must exist in UEFI mode
+sub is_efi_boot {
+    return !!script_output('test -d /sys/firmware/efi/ && ls -A /sys/firmware/efi/', proceed_on_failure => 1);
+}
+
+#   Function: parse the output from script_output to get the pattern list
+#   Reason  : sometimes script_output with 'zypper pt -u' will cost a lot of time to return,
+#   which cause the console have some system message in the output. we need filt out these
+#   info before we process the result.
+#   parameters:
+#   $cmd   : the command line
+#   $start : the line that start with $start, which is we want
+#   return :  an array of pattern list
+sub get_pattern_list {
+    my ($cmd, $start) = @_;
+
+    my $pkg_name;
+    my @column   = ();
+    my @pkg_list = ();
+    my %seen     = ();
+    my @unique   = ();
+
+    my @pkg_lines = split(/\n/, script_output($cmd, 120));
+
+    foreach my $line (@pkg_lines) {
+        $line =~ s/^\s+|\s+$//g;
+        # In a regular expression, all chars between the \Q and \E are escaped.
+        next if ($line !~ m/^\Q$start\E/);
+        # filter out the spaces in each filed
+        @column = map { s/^\s*|\s*$//gr } split(/\|/, $line);
+        # pkg_name is the 2nd field seperated by '|'
+        $pkg_name = $column[1];
+        push @pkg_list, $pkg_name;
+    }
+
+    if (@pkg_list) {
+        # unique and sort the @pkg_list
+        %seen   = map { $_ => 1 } @pkg_list;
+        @unique = sort keys %seen;
+    }
+
+    return @unique;
+}
+
+=head2 install_patterns
+    install_patterns();
+
+This functions install extra patterns if var PATTERNS is set.
+
+=cut
+
+sub install_patterns {
+    my $pcm = 0;
+    my @pt_list;
+    my @pt_list_un;
+    my @pt_list_in;
+    my $pcm_list    = 0;
+    my $cf_selected = 0;
+
+    if (is_sle('15+')) {
+        $pcm_list = 'Amazon_Web_Services|Google_Cloud_Platform|Microsoft_Azure';
+    }
+    else {
+        $pcm_list = 'Amazon-Web-Services|Google-Cloud-Platform|Microsoft-Azure';
+    }
+    @pt_list_in = get_pattern_list "zypper pt -i", "i";
+    # install all patterns from product.
+    if (check_var('PATTERNS', 'all')) {
+        @pt_list_un = get_pattern_list "zypper pt -u", "|";
+    }
+    # install certain pattern from parameter.
+    else {
+        @pt_list_un = split(/,/, get_var('PATTERNS'));
+    }
+
+    my %installed_pt = ();
+    foreach (@pt_list_in) {
+        # Remove pattern common-criteria if already installed, poo#73645
+        if ($_ =~ /common-criteria/) {
+            zypper_call("remove -t pattern $_");
+            next;
+        }
+        $installed_pt{$_} = 1;
+    }
+    @pt_list = sort grep(!$installed_pt{$_}, @pt_list_un);
+    $pcm     = grep /$pcm_list/, @pt_list_in;
+
+    for my $pt (@pt_list) {
+        # if pattern is set default, skip
+        next if ($pt =~ /default/);
+        # Cloud patterns are conflict by each other, only install cloud pattern from single vender.
+        if ($pt =~ /$pcm_list/) {
+            next unless $pcm == 0;
+            $pt .= '*';
+            $pcm = 1;
+        }
+        # Only one CFEngine pattern can be installed
+        if ($pt =~ /CFEngine|CFEngien/) {
+            if ($cf_selected == 0) {
+                $cf_selected = 1;
+            }
+            elsif ($cf_selected == 1) {
+                record_soft_failure 'bsc#950763 CFEngine pattern is listed twice in installer';
+                next;
+            }
+        }
+        # skip the installation of "SAP Application Server Base", poo#75058.
+        if (($pt =~ /sap_server/) && is_sle('=11-SP4')) {
+            next;
+        }
+        # if pattern is common-criteria and PATTERNS is all, skip, poo#73645
+        next if (($pt =~ /common-criteria/) && check_var('PATTERNS', 'all'));
+        zypper_call("in -t pattern $pt", timeout => 1800);
+    }
+}
+
+sub common_service_action {
+    my ($service, $type, $action) = @_;
+
+    if ($type eq 'SystemV') {
+        if ($action eq 'enable') {
+            assert_script_run 'chkconfig ' . $service . ' on';
+        } elsif ($action eq 'is-enabled') {
+            assert_script_run 'chkconfig ' . $service . ' | grep on';
+        } elsif ($action eq 'is-active') {
+            assert_script_run '/etc/init.d/' . $service . ' status | grep running';
+        } else {
+            assert_script_run '/etc/init.d/' . $service . ' ' . $action;
+        }
+    } elsif ($type eq 'Systemd') {
+        systemctl $action . ' ' . $service;
+    } else {
+        die "Unsupported service type, please check it again.";
+    }
+}
+
+sub get_secureboot_status {
+    my $sbvar = '8be4df61-93ca-11d2-aa0d-00e098032b8c-SecureBoot';
+    my $ret;
+
+    if (is_sle('<12-SP3')) {
+        $ret = script_output("efivar -pn $sbvar");
+
+        if ($ret =~ m/^Value:\s*^\d+\s+(\d+)/ms) {
+            $ret = $1;
+        }
+    } else {
+        $ret = script_output("efivar -dn $sbvar");
+    }
+
+    die "Efivar returned invalid SecureBoot state $ret" if $ret !~ m/^[0-9]+/i;
+    return $ret != 0;
+}
+
+sub assert_secureboot_status {
+    my $expected = shift;
+
+    my $state    = get_secureboot_status;
+    my $statestr = $state ? 'on' : 'off';
+    die "Error: SecureBoot is $statestr" if $state xor $expected;
+}
+
+sub susefirewall2_to_firewalld {
+    my $timeout = 360;
+    $timeout = 1200 if check_var('ARCH', 'aarch64');
+    assert_script_run('susefirewall2-to-firewalld -c',                                     timeout => $timeout);
+    assert_script_run('firewall-cmd --permanent --zone=external --add-service=vnc-server', timeout => 60);
+    # On some platforms such as Aarch64, the 'firewalld restart'
+    # can't finish in the default timeout.
+
+    systemctl 'restart firewalld', timeout => $timeout;
+    script_run('iptables -S', timeout => $timeout);
+    set_var('SUSEFIREWALL2_SERVICE_CHECK', 1);
+}
+
+=head2 permit_root_ssh
+    permit_root_ssh();
+
+Due to bsc#1173067, openssh now no longer allows RootLogin
+using password auth on Tumbleweed, the latest SLE16 and
+Leap16 will sync with Tumbleweed as well.
+
+=cut
+
+sub permit_root_ssh {
+    if (is_sle('<16') || is_leap('<16.0')) {
+        my $results = script_run("grep 'PermitRootLogin yes' /etc/ssh/sshd_config");
+        if (!$results) {
+            assert_script_run("sed -i 's/^PermitRootLogin.*\$/PermitRootLogin yes/' /etc/ssh/sshd_config");
+            assert_script_run("systemctl restart sshd");
+        }
+    }
+    else {
+        assert_script_run("echo 'PermitRootLogin yes' > /etc/ssh/sshd_config.d/root.conf");
+        assert_script_run("systemctl restart sshd");
+    }
+}
+
 1;

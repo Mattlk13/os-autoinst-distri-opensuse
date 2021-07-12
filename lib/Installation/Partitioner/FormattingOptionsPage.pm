@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright © 2019 SUSE LLC
+# Copyright © 2019-2021 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -10,7 +10,7 @@
 # Summary: The class introduces all accessing methods for Formatting Options
 # Page of Expert Partitioner Wizard, that are common for all the versions of the
 # page (e.g. for both Libstorage and Libstorage-NG).
-# Maintainer: Oleksandr Orlov <oorlov@suse.de>
+# Maintainer: QE YaST <qa-sle-yast@suse.de>
 
 package Installation::Partitioner::FormattingOptionsPage;
 use strict;
@@ -19,21 +19,24 @@ use testapi;
 use parent 'Installation::WizardPage';
 
 use constant {
-    FORMATTING_OPTIONS_PAGE => 'partition-format',
-    FILESYSTEM_TYPE         => 'partitioning_%s-format-selected',
-    PARTITION_ID_PREP_BOOT  => 'filesystem-prep',
-    PARTITION_ID_EFI_SYSTEM => 'partition-selected-efi-type',
-    PARTITION_ID_BIOS_BOOT  => 'partition-selected-bios-boot-type',
-    PARTITION_ID_LINUX_RAID => 'partition-selected-raid-type'
+    FORMATTING_OPTIONS_PAGE       => 'partition-format',
+    FILESYSTEM_TYPE               => 'partitioning_%s-format-selected',
+    PARTITION_ID_PREP_BOOT        => 'filesystem-prep',
+    PARTITION_ID_EFI_SYSTEM       => 'partition-selected-efi-type',
+    PARTITION_ID_BIOS_BOOT        => 'partition-selected-bios-boot-type',
+    PARTITION_ID_LINUX_RAID       => 'partition-selected-raid-type',
+    PARTITION_ID_LINUX_LVM        => 'partition-selected-lvm-type',
+    ENCRYPT_DEVICE_OPTION_CHECKED => 'partition-encrypt'
 };
 
 sub new {
     my ($class, $args) = @_;
     my $self = bless {
-        do_not_format_shortcut => $args->{do_not_format_shortcut},
-        format_shortcut        => $args->{format_shortcut},
-        filesystem_shortcut    => $args->{filesystem_shortcut},
-        do_not_mount_shortcut  => $args->{do_not_mount_shortcut}
+        do_not_format_shortcut  => $args->{do_not_format_shortcut},
+        format_shortcut         => $args->{format_shortcut},
+        filesystem_shortcut     => $args->{filesystem_shortcut},
+        do_not_mount_shortcut   => $args->{do_not_mount_shortcut},
+        encrypt_device_shortcut => $args->{encrypt_device_shortcut}
     }, $class;
 }
 
@@ -72,6 +75,9 @@ sub select_partition_id {
     elsif ($partition_id eq 'linux-raid') {
         $partition_id_needle = PARTITION_ID_LINUX_RAID;
     }
+    elsif ($partition_id eq 'linux-lvm') {
+        $partition_id_needle = PARTITION_ID_LINUX_LVM;
+    }
     else {
         die "\"$partition_id\" Partition ID is not known.";
     }
@@ -85,10 +91,8 @@ sub select_filesystem {
     return if $skip;
     assert_screen(FORMATTING_OPTIONS_PAGE);
     send_key($self->{filesystem_shortcut});
-    wait_screen_change(sub {
-            send_key 'end';
-    }, 20);
-    send_key_until_needlematch((sprintf FILESYSTEM_TYPE, $filesystem), 'up');
+    send_key 'end', wait_screen_change => 1;
+    send_key_until_needlematch((sprintf FILESYSTEM_TYPE, $filesystem), 'up', 20, 5);
 }
 
 # Mounting Options
@@ -110,7 +114,13 @@ sub fill_in_mount_point_field {
     assert_screen(FORMATTING_OPTIONS_PAGE);
     send_key('alt-m');
     type_string($mount_point);
+    send_key('delete');    # to avoid autocomplete
 }
 
+sub check_encrypt_device_checkbox {
+    my ($self) = @_;
+    send_key($self->{encrypt_device_shortcut});
+    assert_screen(ENCRYPT_DEVICE_OPTION_CHECKED);
+}
 
 1;

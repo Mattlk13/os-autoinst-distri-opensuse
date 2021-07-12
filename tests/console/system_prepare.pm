@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright © 2020 SUSE LLC
+# Copyright © 2020-2021 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -13,15 +13,18 @@
 # - Register modules if SCC_ADDONS, MEDIA_UPGRADE and in Regression flavor
 # are defined
 # - If system is vmware, set resolution to 1024x768 (and write to grub)
+# - Stop and disable packagekit
 # Maintainer: Rodion Iafarov <riafarov@suse.com>
 
 use base 'consoletest';
 use testapi;
 use utils;
+use zypper;
 use version_utils 'is_sle';
-use serial_terminal 'add_serial_console';
+use serial_terminal 'prepare_serial_console';
 use bootloader_setup qw(change_grub_config grub_mkconfig);
 use registration;
+use services::registered_addons 'full_registered_check';
 use strict;
 use warnings;
 
@@ -31,16 +34,13 @@ sub run {
 
     ensure_serialdev_permissions;
 
-    # Configure serial consoles for virtio support
-    # poo#18860 Enable console on hvc0 on SLES < 12-SP2
-    # poo#44699 Enable console on hvc1 to fix login issues on ppc64le
-    if (get_var('VIRTIO_CONSOLE')) {
-        if (is_sle('<12-SP2')) {
-            add_serial_console('hvc0');
-        }
-        elsif (get_var('OFW')) {
-            add_serial_console('hvc1');
-        }
+    prepare_serial_console;
+
+    if (!check_var('DESKTOP', 'textmode')) {
+        # Make sure packagekit is not running, or it will conflict with SUSEConnect.
+        quit_packagekit;
+        # poo#87850 wait the zypper processes in background to finish and release the lock.
+        wait_quit_zypper;
     }
 
     # Register the modules after media migration, so it can do regession
@@ -70,6 +70,30 @@ sub run {
         change_grub_config('=.*', '=1024x768x32', 'GFXPAYLOAD_LINUX=');
         grub_mkconfig;
     }
+
+    # Save output info to logfile
+    if (is_sle && get_required_var('FLAVOR') =~ /Migration/) {
+        my $out;
+        my $timeout  = bmwqemu::scale_timeout(30);
+        my $waittime = bmwqemu::scale_timeout(5);
+        while (1) {
+            $out = script_output("SUSEConnect --status-text", proceed_on_failure => 1);
+            last if (($timeout < 0) || ($out !~ /System management is locked by the application with pid/));
+            sleep $waittime;
+            $timeout -= $waittime;
+            diag "SUSEConnect --status-text locked: $out";
+        }
+        diag "SUSEConnect --status-text: $out";
+        if (!get_var('MEDIA_UPGRADE')) {
+            assert_script_run "SUSEConnect --status-text | grep -v 'Not Registered'";
+            services::registered_addons::full_registered_check;
+        }
+    }
+
+    assert_script_run 'rpm -q systemd-coredump || zypper -n in systemd-coredump || true', timeout => 200 if get_var('COLLECT_COREDUMPS');
+
+    # stop and disable PackageKit
+    quit_packagekit;
 }
 
 sub test_flags {

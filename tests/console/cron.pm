@@ -1,10 +1,11 @@
-# Copyright (C) 2019 SUSE LLC
+# Copyright (C) 2019-2020 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: cronie
 # Summary: Check for CRON daemon
 # - check if cron is enabled
 # - check if cron is active
@@ -18,7 +19,8 @@ use testapi;
 use utils;
 
 sub run {
-    select_console 'root-console';
+    my $self = shift;
+    $self->select_serial_terminal;
 
     # check if cronie is installed, enabled and running
     assert_script_run 'rpm -q cronie';

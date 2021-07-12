@@ -67,7 +67,9 @@ It allows to have more control over diffs amongs snapshots.
 sub y2snapper_adding_new_snapper_conf {
     assert_script_run("btrfs subvolume create /test");
     assert_script_run("snapper -c test create-config /test");
-    assert_script_run('sed -i \'/^TIMELINE_CREATE/ s/yes/no/\' /etc/snapper/configs/test');
+    assert_script_run('snapper -c test set-config TIMELINE_CREATE=no TIMELINE_MIN_AGE=0');
+    assert_script_run('snapper -c test get-config');
+    assert_script_run('snapper -c test cleanup timeline');
 }
 
 =head2 y2snapper_create_snapshot
@@ -151,6 +153,7 @@ sub y2snapper_show_changes_and_delete {
     send_key_until_needlematch 'yast2_snapper-new_snapshot_selected', 'tab';
     # Press Show Changes
     send_key "alt-s";
+    wait_still_screen(2, 4);
     assert_screen 'yast2_snapper-unselected_testdata';
     if ($ncurses) {
         # Select 1. subvolume (root) in the tree and expand it
@@ -205,10 +208,11 @@ sub y2snapper_clean_and_quit {
     script_run 'snapper -c test delete-config';
     script_run 'rm -rf /test/*';
     script_run "ls";
-    unless (defined($module_name)) {
-        type_string "exit\n";
-        save_screenshot;
-        type_string "exit\n";
+    unless ($ncurses) {
+        enter_cmd "exit";    # root
+        wait_still_screen(1);
+        enter_cmd "exit";    # user
+        wait_still_screen(1);
     }
 }
 
@@ -242,7 +246,7 @@ sub y2snapper_failure_analysis {
     script_run('pidof snapperd && gdb --batch -q -ex "thread apply all bt" -ex q /usr/sbin/snapperd $(pidof snapperd) |& tee /tmp/snapperd_bt_all.log');
     upload_logs '/tmp/snapperd_bt_all.log';
     set_var('TIMEOUT_SCALE', $previous_timeout_scale);
-    type_string "exit\n";
+    enter_cmd "exit";
 }
 
 1;

@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright © 2019 SUSE LLC
+# Copyright © 2019-2021 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -10,7 +10,7 @@
 # Summary: The class introduces all accessing methods for Role Page of Expert
 # Partitioner Wizard, that are common for all the versions of the page
 # (e.g. for both Libstorage and Libstorage-NG).
-# Maintainer: Oleksandr Orlov <oorlov@suse.de>
+# Maintainer: QE YaST <qa-sle-yast@suse.de>
 
 package Installation::Partitioner::RolePage;
 use strict;
@@ -43,6 +43,9 @@ sub select_role_radiobutton {
     }
     if ($role eq 'data') {
         send_key('alt-d');
+    }
+    if ($role eq 'efi') {
+        send_key('alt-e');
     }
 }
 

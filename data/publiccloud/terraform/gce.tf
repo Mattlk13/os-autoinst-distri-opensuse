@@ -1,3 +1,20 @@
+terraform {
+  required_providers {
+    google = {
+      version = "= 3.65.0"
+      source = "hashicorp/google"
+    }
+    random = {
+      version = "= 3.1.0"
+      source = "hashicorp/random"
+    }
+    external = {
+      version = "= 2.1.0"
+      source = "hashicorp/external"
+    }
+  }
+}
+
 variable "cred_file" {
     default = "/root/google_credentials.json"
 }
@@ -72,6 +89,7 @@ resource "google_compute_instance" "openqa" {
     zone         = var.region
 
     boot_disk {
+        device_name = "${var.name}-${element(random_id.service.*.hex, count.index)}"
         initialize_params {
             image = var.image_id
         }
@@ -80,8 +98,8 @@ resource "google_compute_instance" "openqa" {
     metadata = merge({
             sshKeys = "susetest:${file("/root/.ssh/id_rsa.pub")}"
             openqa_created_by = var.name
-            openqa_created_date = "${timestamp()}"
-            openqa_created_id = "${element(random_id.service.*.hex, count.index)}"
+            openqa_created_date = timestamp()
+            openqa_created_id = element(random_id.service.*.hex, count.index)
         }, var.tags)
 
     network_interface {
@@ -120,14 +138,14 @@ resource "google_compute_disk" "default" {
     physical_block_size_bytes = 4096
     labels = {
         openqa_created_by = var.name
-        openqa_created_id = "${element(random_id.service.*.hex, count.index)}"
+        openqa_created_id = element(random_id.service.*.hex, count.index)
     }
 }
 
 output "public_ip" {
-    value = "${google_compute_instance.openqa.*.network_interface.0.access_config.0.nat_ip}"
+    value = google_compute_instance.openqa.*.network_interface.0.access_config.0.nat_ip
 }
 
 output "vm_name" {
-    value = "${google_compute_instance.openqa.*.name}"
+    value = google_compute_instance.openqa.*.name
 }

@@ -7,6 +7,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: yast2-nis-client yast2-nfs-client yast2-pam yp-tools firewalld
 # Summary: create and delete nis client configuration and functionality
 # Application starts and extra dependencies are needled and installed;
 # NIS Server Wizard
@@ -56,8 +57,8 @@ sub run() {
         send_key 'alt-y';
     }
     send_key 'alt-m';
-    assert_screen 'nis-client-automounter-enabled';    # this checks if nis and automounter got really enabled
-    send_key 'alt-i';                                  # enter Nis domain for enter string suse.de
+    assert_screen 'nis-client-automounter-enabled';                      # this checks if nis and automounter got really enabled
+    send_key 'alt-i';                                                    # enter Nis domain for enter string suse.de
     send_key_until_needlematch 'nis-domain-empty-field', 'backspace';    # clear NIS Domain field if it is prefilled
     type_string "suse.de";
     send_key 'alt-a';
@@ -108,7 +109,7 @@ sub run() {
         send_key 'alt-o';
     }
     else {
-        send_key 'alt-o';                                                # close it now even when config is not valid
+        send_key 'alt-o';    # close it now even when config is not valid
     }    # check error message for 'nis server not found'
 }
 1;

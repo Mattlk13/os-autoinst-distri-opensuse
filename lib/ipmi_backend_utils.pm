@@ -21,7 +21,7 @@ use version_utils qw(is_storage_ng is_sle);
 use utils;
 use power_action_utils 'prepare_system_shutdown';
 
-our @EXPORT = qw(set_serial_console_on_vh switch_from_ssh_to_sol_console set_dom0_mem set_pxe_efiboot boot_local_disk_arm_huawei);
+our @EXPORT = qw(set_serial_console_on_vh switch_from_ssh_to_sol_console adjust_for_ipmi_xen set_pxe_efiboot ipmitool);
 
 #With the new ipmi backend, we only use the root-ssh console when the SUT boot up,
 #and no longer setup the real serial console for either kvm or xen.
@@ -77,7 +77,7 @@ sub get_dom0_serialdev {
         $grub_ver = "grub2";
     }
 
-    type_string("echo \"Debug info: hypervisor serial dev should be $dom0_serialdev. Grub version is $grub_ver.\"\n");
+    enter_cmd("echo \"Debug info: hypervisor serial dev should be $dom0_serialdev. Grub version is $grub_ver.\"");
 
     return $dom0_serialdev;
 }
@@ -106,14 +106,17 @@ sub setup_console_in_grub {
             # autoballoning is disabled since sles15sp1 beta2. we use default dom0_ram which is '10% of total ram + 1G'
             # while for older release, bsc#1107572 "This dom0 memory amount works well with hosts having 4 to 8 Gigs of RAM"
             # considering of one SUT in OSD with 4G ram only, we set dom0_mem=2G
-            my $dom0_mem_options = "";
+            my $dom0_options = "";
             if (is_sle('<=12-SP4') || is_sle('=15')) {
-                $dom0_mem_options = "dom0_mem=2048M,max:2048M";
+                $dom0_options = "dom0_mem=2048M,max:2048M";
+            }
+            if (get_var("ENABLE_SRIOV_NETWORK_CARD_PCI_PASSSHTROUGH")) {
+                $dom0_options .= " iommu=on";
             }
             $cmd
               = "sed -ri '/multiboot/ "
               . "{s/(console|loglevel|log_lvl|guest_loglvl)=[^ ]*//g; "
-              . "/multiboot/ s/\$/ $dom0_mem_options console=com2,115200 log_lvl=all guest_loglvl=all sync_console $com_settings/;}; "
+              . "/multiboot/ s/\$/ $dom0_options console=com2,115200 log_lvl=all guest_loglvl=all sync_console $com_settings/;}; "
               . "' $grub_cfg_file";
             assert_script_run($cmd);
             save_screenshot;
@@ -126,11 +129,17 @@ sub setup_console_in_grub {
             die "Host Hypervisor is not xen or kvm";
         }
 
+        #enable Intel VT-d for SR-IOV test running on intel SUTs
+        my $intel_option = "";
+        if (get_var("ENABLE_SRIOV_NETWORK_CARD_PCI_PASSSHTROUGH") && script_run("grep Intel /proc/cpuinfo") == 0) {
+            $intel_option = "intel_iommu=on";
+        }
+
         $cmd
           = "cp $grub_cfg_file ${grub_cfg_file}.org "
           . "\&\& sed -ri '/($bootmethod\\s*.*$search_pattern)/ "
           . "{s/(console|loglevel|log_lvl|guest_loglvl)=[^ ]*//g; "
-          . "/$bootmethod\\s*.*$search_pattern/ s/\$/ console=$ipmi_console,115200 console=tty loglevel=5/;}; "
+          . "/$bootmethod\\s*.*$search_pattern/ s/\$/ console=$ipmi_console,115200 console=tty loglevel=5 $intel_option/;}; "
           . "s/timeout=-{0,1}[0-9]{1,}/timeout=30/g;"
           . "' $grub_cfg_file";
         assert_script_run($cmd);
@@ -140,6 +149,10 @@ sub setup_console_in_grub {
         save_screenshot;
 
         if (!script_run('grep HPE /sys/class/dmi/id/board_vendor') == 0) {
+            $cmd = "sed -ri '/^terminal.*\$/ {:mylabel; n; s/^terminal.*\$//;b mylabel;}' $grub_cfg_file";
+            assert_script_run($cmd);
+            $cmd = "sed -ri '/^[[:space:]]*\$/d' $grub_cfg_file";
+            assert_script_run($cmd);
             $cmd = "sed -ri 's/^terminal.*\$/terminal_input console serial\\nterminal_output console serial\\nterminal console serial/g' $grub_cfg_file";
             assert_script_run($cmd);
         }
@@ -207,7 +220,7 @@ sub get_installation_partition {
 
     die "Error: can not get installation partition!" unless ($partition);
 
-    type_string "echo Debug info: The partition with the installed system is $partition .\n";
+    enter_cmd "echo Debug info: The partition with the installed system is $partition .";
     save_screenshot;
 
     return $partition;
@@ -215,7 +228,7 @@ sub get_installation_partition {
 
 
 # This works only on SLES 12+
-sub set_dom0_mem {
+sub adjust_for_ipmi_xen {
     my ($root_prefix) = @_;
     $root_prefix = "/" if (!defined $root_prefix) || ($root_prefix eq "");
     my $installation_disk = "";
@@ -229,7 +242,7 @@ sub set_dom0_mem {
     assert_script_run('mount --rbind /proc /mnt/proc');
     assert_script_run('mount --rbind /sys /mnt/sys');
     assert_script_run('mount --rbind /dev /mnt/dev');
-    type_string("chroot /mnt\n");
+    enter_cmd("chroot /mnt");
     wait_still_screen;
 
     # Mount Btrfs sub-volumes
@@ -238,11 +251,12 @@ sub set_dom0_mem {
     assert_script_run ". /etc/default/grub";
     my $xen_dom0_mem = get_var('XEN_DOM0_MEM', '4096M');
     assert_script_run "sed -i '/GRUB_CMDLINE_XEN_DEFAULT/c\\GRUB_CMDLINE_XEN_DEFAULT=\"\$GRUB_CMDLINE_XEN_DEFAULT dom0_mem=$xen_dom0_mem\"' /etc/default/grub";
+    assert_script_run "sed -i '/GRUB_DEFAULT/c\\GRUB_DEFAULT=\"2\"' /etc/default/grub";
     assert_script_run "cat /etc/default/grub";
     assert_script_run "grub2-mkconfig -o /boot/grub2/grub.cfg";
 
     # Exit chroot
-    type_string "exit\n";
+    enter_cmd "exit";
     wait_still_screen;
 
     #cleanup mount
@@ -269,14 +283,14 @@ sub set_pxe_efiboot {
     my $get_active_eif_maddr = "ip link show | grep $active_eif -A1 | awk \'/link\\\/ether/ \{print \$2\}\' | awk \'\{print \$1,\$2,\$3,\$4,\$5,\$6\}\' FS=\":\" OFS=\"\"";
     my $active_eif_maddr        = script_output($get_active_eif_maddr, $wait_script, type_command => 1, proceed_on_failure => 0);
     my $get_pxeboot_entry_eif   = "$root_prefix/usr/sbin/efibootmgr -v | grep -i $active_eif_maddr";
-    my $pxeboot_entry_eif       = script_output($get_pxeboot_entry_eif, $wait_script, type_command => 1, proceed_on_failure => 0);
+    my $pxeboot_entry_eif       = script_output($get_pxeboot_entry_eif,           $wait_script, type_command => 1, proceed_on_failure => 0);
     my $pxeboot_entry_eif_count = script_output("$get_pxeboot_entry_eif | wc -l", $wait_script, type_command => 1, proceed_on_failure => 0);
     my $get_pxeboot_entry_ip4   = "";
     my $pxeboot_entry_ip4       = "";
     my $pxeboot_entry_ip4_count = "";
     if ($pxeboot_entry_eif_count gt 1) {
         $get_pxeboot_entry_ip4   = "$get_pxeboot_entry_eif | grep -i -E \"IP4|IPv4\"";
-        $pxeboot_entry_ip4       = script_output($get_pxeboot_entry_ip4, $wait_script, type_command => 1, proceed_on_failure => 0);
+        $pxeboot_entry_ip4       = script_output($get_pxeboot_entry_ip4,           $wait_script, type_command => 1, proceed_on_failure => 0);
         $pxeboot_entry_ip4_count = script_output("$get_pxeboot_entry_ip4 | wc -l", $wait_script, type_command => 1, proceed_on_failure => 0);
     }
     my $get_pxeboot_entry_pxe   = "";
@@ -284,7 +298,7 @@ sub set_pxe_efiboot {
     my $pxeboot_entry_pxe_count = "";
     if ($pxeboot_entry_ip4_count gt 1) {
         $get_pxeboot_entry_pxe   = "$get_pxeboot_entry_ip4 | grep -i \"PXE\"";
-        $pxeboot_entry_pxe       = script_output($get_pxeboot_entry_pxe, $wait_script, type_command => 1, proceed_on_failure => 0);
+        $pxeboot_entry_pxe       = script_output($get_pxeboot_entry_pxe,           $wait_script, type_command => 1, proceed_on_failure => 0);
         $pxeboot_entry_pxe_count = script_output("$get_pxeboot_entry_pxe | wc -l", $wait_script, type_command => 1, proceed_on_failure => 0);
         if ($pxeboot_entry_pxe_count gt 1) {
             die "The number of PXE boot entries can not be narrowed down to 1";
@@ -353,8 +367,8 @@ sub set_serial_console_on_vh {
 
     #set up xen serial console
     my $ipmi_console = get_dom0_serialdev("$root_dir");
-    if   (${virt_type} eq "xen" || ${virt_type} eq "kvm") { setup_console_in_grub($ipmi_console, $root_dir, $virt_type); }
-    else                                                  { die "Host Hypervisor is not xen or kvm"; }
+    if (${virt_type} eq "xen" || ${virt_type} eq "kvm") { setup_console_in_grub($ipmi_console, $root_dir, $virt_type); }
+    else                                                { die "Host Hypervisor is not xen or kvm"; }
 
     #cleanup mount
     if ($mount_point ne "") {
@@ -364,24 +378,20 @@ sub set_serial_console_on_vh {
 
 }
 
-#Huawei arm machines require password login after "boot from local disk" is selected.
-#Before the desired grub menu is shown, you need to navigate into the boot menu and
-#select the "sles" boot item.
-sub boot_local_disk_arm_huawei {
-    assert_screen('input-password-huawei', 180);
-    type_string_slow "Huawei12#\$";
-    send_key 'ret';
-    assert_screen('default-password-huawei', 180);
-    send_key 'ret';
+#ipmitool to perform server management
+sub ipmitool {
+    my ($cmd) = @_;
 
-    assert_screen('setup-menu-huawei', 180);
-    save_screenshot;
-    send_key_until_needlematch('exit-menu-huawei', 'right', 10, 5);
-    save_screenshot;
-    send_key_until_needlematch('boot-sles-huawei', 'down', 10, 5);
-    save_screenshot;
-    send_key 'ret';
-    save_screenshot;
+    my @cmd = ('ipmitool', '-I', 'lanplus', '-H', $bmwqemu::vars{IPMI_HOSTNAME}, '-U', $bmwqemu::vars{IPMI_USER}, '-P', $bmwqemu::vars{IPMI_PASSWORD});
+    push(@cmd, split(/ /, $cmd));
+
+    my ($stdin, $stdout, $stderr, $ret);
+    $ret = IPC::Run::run(\@cmd, \$stdin, \$stdout, \$stderr);
+    chomp $stdout;
+    chomp $stderr;
+
+    bmwqemu::diag("IPMI: $stdout");
+    return $stdout;
 }
 
 1;

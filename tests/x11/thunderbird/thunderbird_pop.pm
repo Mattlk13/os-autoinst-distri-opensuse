@@ -7,6 +7,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: MozillaThunderbird
 # Summary: send an email using SMTP and receive it using POP
 # - Kill thunderbird, erase all config files
 # - Launch thunderbird
@@ -24,8 +25,15 @@ use utils;
 use base "thunderbird_common";
 
 sub run {
-    my $self    = shift;
-    my $account = "internal_account_A";
+    my $self     = shift;
+    my $account  = "internal_account";
+    my $hostname = get_var('HOSTNAME');
+    if ($hostname eq 'client') {
+        $account = "internal_account_C";
+    }
+    else {
+        $account = "internal_account_A";
+    }
 
     mouse_hide(1);
     # clean up and start thunderbird
@@ -36,7 +44,7 @@ sub run {
     } else {
         $self->tb_setup_account('pop', $account);
 
-        my $mail_subject = $self->tb_send_message($account);
+        my $mail_subject = $self->tb_send_message('pop', $account);
         $self->tb_check_email($mail_subject);
 
         # exit Thunderbird

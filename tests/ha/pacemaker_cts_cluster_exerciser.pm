@@ -7,6 +7,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: pacemaker-cts
 # Summary: Execute the pacemaker-cts cluster exerciser to test a whole
 # cluster.
 # Maintainer: Julien Adamek <jadamek@suse.com>
@@ -40,7 +41,6 @@ sub run {
 
     # Pacemaker cts software must be started from the client server
     if (check_var('PACEMAKER_CTS_TEST_ROLE', 'client')) {
-        assert_script_run 'ssh-keygen -f /root/.ssh/id_rsa -N ""';
 
         foreach my $node ($node_01, $node_02) {
             add_to_known_hosts($node);

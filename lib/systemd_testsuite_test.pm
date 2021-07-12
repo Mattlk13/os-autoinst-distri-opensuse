@@ -21,7 +21,7 @@ use testapi;
 use power_action_utils 'power_action';
 use utils 'zypper_call';
 use version_utils qw(is_opensuse is_sle is_tumbleweed);
-
+use bootloader_setup qw(change_grub_config grub_mkconfig);
 
 sub testsuiteinstall {
     my ($self) = @_;
@@ -41,20 +41,12 @@ sub testsuiteinstall {
             $qa_testsuite_repo = 'https://download.opensuse.org/repositories/devel:/openSUSE:/QA:/' . $sub_project;
         }
         else {
-            my $version_with_service_pack    = get_required_var('VERSION');
-            my $version_without_service_pack = substr($version_with_service_pack, 0, index($version_with_service_pack, '-'));
-            $qa_testsuite_repo = "http://download.suse.de/ibs/QA:/Head:/SLE$version_without_service_pack/SLE-$version_with_service_pack/";
+            my $version_with_service_pack = get_required_var('VERSION');
+            $qa_testsuite_repo = "http://download.suse.de/ibs/QA:/Head/SLE-$version_with_service_pack/";
         }
         die '$qa_testsuite_repo is not set' unless ($qa_testsuite_repo);
     }
 
-    if (get_var('BOOT_HDD_IMAGE')) {
-        if (check_var('ARCH', 'aarch64')) {
-            wait_still_screen 10;
-            send_key 'ret';
-        }
-        wait_serial('Welcome to', 300) || die "System did not boot in 300 seconds.";
-    }
     select_console 'root-console';
 
     if (is_sle('15+') && !main_common::is_updates_tests) {
@@ -70,8 +62,11 @@ sub testsuiteinstall {
     zypper_call '--gpg-auto-import-keys ref';
     # use systemd from the repo of the qa package
     if (get_var('SYSTEMD_FROM_TESTREPO')) {
-        zypper_call 'in --from systemd-testrepo systemd systemd-sysvinit udev libsystemd0';
-        wait_screen_change { type_string "shutdown -r now\n" };
+        if (is_sle('>15-SP2')) { zypper_call 'rm systemd-bash-completion' }
+        zypper_call 'in --from systemd-testrepo systemd systemd-sysvinit udev libsystemd0 systemd-coredump libudev1';
+        change_grub_config('=.*', '=9', 'GRUB_TIMEOUT');
+        grub_mkconfig;
+        wait_screen_change { enter_cmd "shutdown -r now" };
         if (check_var('ARCH', 's390x')) {
             $self->wait_boot(bootloader_time => 180);
         } else {
@@ -95,7 +90,7 @@ sub testsuiteprepare {
     assert_script_run "find /etc/systemd/system/ -name 'end.service' -delete";
     assert_script_run "rm -rf /var/tmp/systemd-test*";
     assert_script_run "clear";
-    assert_script_run "cd /var/opt/systemd-tests";
+    assert_script_run "cd /usr/lib/systemd/tests";
     assert_script_run "./run-tests.sh $testname --setup 2>&1 | tee /tmp/testsuite.log", 300;
 
     if ($option eq 'nspawn') {
@@ -103,13 +98,13 @@ sub testsuiteprepare {
         assert_script_run "ls -l \$\{testservicepath#testservice=\}";
     }
     else {
-        #some tests don't create the testsuite.service file
-        return if ($testname eq 'TEST-18-FAILUREACTION' || $testname eq 'TEST-21-SYSUSERS');
+        #tests and versions that don't need a reboot
+        return if ($testname eq 'TEST-18-FAILUREACTION' || $testname eq 'TEST-21-SYSUSERS' || is_sle('>15-SP2') || is_tumbleweed);
 
         assert_script_run 'ls -l /etc/systemd/system/testsuite.service';
         #virtual machines do a vm reset instead of reboot
         if (!check_var('BACKEND', 'qemu') || ($option eq 'needreboot')) {
-            wait_screen_change { type_string "shutdown -r now\n" };
+            wait_screen_change { enter_cmd "shutdown -r now" };
             if (check_var('ARCH', 's390x')) {
                 $self->wait_boot(bootloader_time => 180);
             }
@@ -130,8 +125,9 @@ sub testsuiteprepare {
 sub post_fail_hook {
     my ($self) = @_;
     #upload logs from given testname
-    $self->tar_and_upload_log('/var/opt/systemd-tests/logs', '/tmp/systemd_testsuite-logs.tar.bz2');
-    $self->save_and_upload_log('journalctl --no-pager -axb', 'journal.log');
+    $self->tar_and_upload_log('/usr/lib/systemd/tests/logs',       '/tmp/systemd_testsuite-logs.tar.bz2');
+    $self->tar_and_upload_log('/var/log/journal /run/log/journal', 'binary-journal-log.tar.bz2');
+    $self->save_and_upload_log('journalctl --no-pager -axb -o short-precise', 'journal.txt');
     upload_logs('/shutdown-log.txt', failok => 1);
 }
 

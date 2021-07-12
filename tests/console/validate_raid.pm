@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright © 2019 SUSE LLC
+# Copyright © 2019-2021 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -8,7 +8,7 @@
 # without any warranty.
 
 # Summary: Simple RAID partitioning layout validation
-# Maintainer: Joaquín Rivera <jeriveramoya@suse.com>
+# Maintainer: QE YaST <qa-sle-yast@suse.de>
 
 use strict;
 use warnings;
@@ -29,15 +29,15 @@ my $raid_partitions_2_arrays = qr/(md(0|1).*){8}|(md(0|1).*){2}/s;
 # 12 raid partitions, with new lsblk output partitions are listed only once
 my $raid_partitions_3_arrays = qr/(md(0|1|2).*){12}|(md(0|1|2).*){3}/s;
 # 8 linux raid members
-my $linux_raid_member_2_arrays = qr/(vd(a|b|c|d)(2|3).+linux_raid_member.*){8}/s;
+my $linux_raid_member_2_arrays = qr/((v|s)d(a|b|c|d)(2|3).+linux_raid_member.*){8}/s;
 # 12 linux raid members
-my $linux_raid_member_3_arrays = qr/(vd(a|b|c|d)(1|2|3|4).+linux_raid_member.*){12}/s;
+my $linux_raid_member_3_arrays = qr/((v|s)d(a|b|c|d)(1|2|3|4).+linux_raid_member.*){12}/s;
 # 4 hard disks
-my $hard_disks = qr/(vd(a|b|c|d)\D+.*){4}/s;
+my $hard_disks = qr/((v|s)d(a|b|c|d)\D+.*){4}/s;
 # 4 ext4 partitions mounted on /boot, with new lsblk output partitions are listed only once
 my $ext4_boot = qr/(md1(p1)?.+ext4.+\/boot.*){4}|(md1(p1)?.+ext4.+\/boot.*){1}/s;
-# Unique vfat partition in first disk (mounted on /boot)
-my $vfat_efi = qr/vda1.+vfat.\s+\/boot\/efi.*(vd(b|c|d)1(?!.*vfat).*){3}/s;
+# Unique vfat partition in first disk (mounted on /boot/efi)
+my $vfat_efi = qr/(vd(a|b|c|d))1.*vfat.*\/boot\/efi/s;
 #
 # Define blocks of expected data for raid configuration in different products and architectures
 #
@@ -97,7 +97,7 @@ sub prepare_test_data {
     }
     elsif (check_var('ARCH', 'x86_64') && is_sle('<15')) {
         @partitioning = (
-            $btrfs, $ext4_boot, $swap,
+            $btrfs,      $ext4_boot, $swap,
             $hard_disks, $linux_raid_member_3_arrays,
         );
         # Additional RAID array (update num_raid_arrays to regenerate regex)

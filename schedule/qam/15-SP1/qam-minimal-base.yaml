@@ -1,7 +1,7 @@
 ---
 name: qam-minimal-base
 schedule:
-- {{boot}}
+- installation/bootloader_start
 - installation/welcome
 - installation/accept_license
 - installation/scc_registration
@@ -21,9 +21,10 @@ schedule:
 - installation/await_install
 - installation/logs_from_installation_system
 - installation/reboot_after_installation
-- {{grub}}
+- installation/handle_reboot
 - installation/first_boot
 - qa_automation/patch_and_reboot
+- console/dracut
 - locale/keymap_or_locale
 - console/system_prepare
 - console/check_network
@@ -39,7 +40,7 @@ schedule:
 - console/zypper_lr
 - console/zypper_ref
 - console/firewall_enabled
-- {{glibc_sanity}}
+- '{{glibc_sanity}}'
 - console/salt
 - console/sshd
 - console/ssh_cleanup
@@ -47,9 +48,9 @@ schedule:
 - console/yast2_bootloader
 - console/yast2_i
 - console/yast2_lan
-- {{yast2_nfs_server}}
+- '{{yast2_nfs_server}}'
 - console/mtab
-- console/mysql_srv
+- console/mariadb_srv
 - console/rsync
 - console/curl_https
 - console/http_srv
@@ -69,12 +70,6 @@ conditional_schedule:
       x86_64:
         - installation/isosize
         - installation/bootloader
-  grub:
-    ARCH:
-      s390x:
-        - boot/reconnect_mgmt_console
-      x86_64:
-        - installation/grub_test
   glibc_sanity:
     ARCH:
       x86_64:

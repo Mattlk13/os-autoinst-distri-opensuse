@@ -7,6 +7,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: python3-ec2metadata iproute2 ca-certificates
 # Summary: This is just bunch of random commands overviewing the public cloud instance
 # We just register the system, install random package, see the system and network configuration
 # This test module will fail at the end to prove that the test run will continue without rollback
@@ -19,15 +20,23 @@ use warnings;
 use testapi;
 use strict;
 use utils;
+use publiccloud::utils;
+use publiccloud::ssh_interactive;
 
 sub run {
     my ($self, $args) = @_;
+    # Preserve args for post_fail_hook
+    $self->{provider} = $args->{my_provider};
     select_console 'root-console';
 
-    assert_script_run("hostname -f");
+    script_run("hostname -f");
     assert_script_run("uname -a");
 
     assert_script_run("cat /etc/os-release");
+    if (is_ec2) {
+        script_run("ec2metadata --api latest --document | tee ec2metadata.txt");
+        upload_logs("ec2metadata.txt");
+    }
 
     assert_script_run("ps aux | nl");
 
@@ -39,13 +48,30 @@ sub run {
     assert_script_run("cat /etc/hosts");
     assert_script_run("cat /etc/resolv.conf");
 
-    zypper_call("in traceroute bzip2");
-    assert_script_run("traceroute -I gate.suse.cz", 90);
+    # Install bzip2 to check for bsc#1165915
+    if (script_run("zypper -n in bzip2") == 8) {
+        record_soft_failure('bsc#1165915');
+        assert_script_run('update-ca-certificates');
+        zypper_call("in bzip2");
+    }
 
     assert_script_run("rpm -qa > /tmp/rpm.list.txt");
-    upload_logs('/tmp/rpm.list.txt');
-    upload_logs('/var/log/zypper.log');
+    upload_logs('/tmp/rpm.list.txt',   timeout => 180, failok => 1);
+    upload_logs('/var/log/zypper.log', timeout => 180, failok => 1);
+
+    assert_script_run("SUSEConnect --status-text", 300);
+    zypper_call("lr -d");
+}
+
+sub test_flags {
+    return {fatal => 1};
+}
+
+sub post_fail_hook {
+    my ($self) = @_;
+    select_host_console(force => 1);
+    # Destroy the public cloud instance
+    $self->{provider}->cleanup();
 }
 
 1;
-

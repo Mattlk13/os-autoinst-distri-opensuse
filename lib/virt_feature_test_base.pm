@@ -8,7 +8,7 @@
 # without any warranty.
 #
 # Summary: This is the base package for virsh test modules, for example,
-# tests/virtualization/xen/hotplugging.pm
+# tests/virtualization/universal/hotplugging.pm
 # tests/virt_autotest/virsh_internal_snapshot.pm
 # tests/virt_autotest/virsh_external_snapshot.pm
 # and etc.
@@ -41,19 +41,35 @@ use List::Util 'first';
 use testapi;
 use utils;
 use virt_utils;
-use xen;
+use virt_autotest::common;
+use virt_autotest::utils;
+use version_utils 'is_sle';
 
 sub run_test {
     die('Please override this subroutine in children modules to run desired tests.');
 }
 
-sub run {
-    my ($self) = @_;
+sub prepare_run_test {
+    my $self = shift;
+
     script_run("rm -f /root/{commands_history,commands_failure}");
     assert_script_run("history -c");
+
+    virt_utils::cleanup_host_and_guest_logs;
+    virt_utils::start_monitor_guest_console;
+}
+
+sub run {
+    my ($self) = @_;
+
+    $self->prepare_run_test if (!(get_var("TEST", '') =~ /qam/) && (is_xen_host() || is_kvm_host()));
+
     $self->{"start_run"} = time();
     $self->run_test;
     $self->{"stop_run"} = time();
+
+    virt_utils::stop_monitor_guest_console if (!(get_var("TEST", '') =~ /qam/) && (is_xen_host() || is_kvm_host()));
+
     #(caller(0))[3] can help pass calling subroutine name into called subroutine
     $self->junit_log_provision((caller(0))[3]) if get_var("VIRT_AUTOTEST");
 }
@@ -107,7 +123,7 @@ sub analyzeResult {
     #Then count up all counters by the number of tests in corresponding status
     my @test_item_status_array = ('pass', 'fail', 'skip', 'softfail', 'timeout', 'unknown');
     $self->{$_ . '_nums'} = 0 foreach (@test_item_status_array);
-    foreach my $guest (keys %xen::guests) {
+    foreach my $guest (keys %virt_autotest::common::guests) {
         foreach my $item (keys %{$self->{test_results}->{$guest}}) {
             my $item_status      = $self->{test_results}->{$guest}->{$item}->{status};
             my $test_item_status = first { $item_status =~ /^$_/i } @test_item_status_array;
@@ -120,7 +136,7 @@ sub analyzeResult {
     if ($status eq 'FAILED' && $self->{"fail_nums"} eq '0') {
         $self->{"fail_nums"} = '1';
         my $uncheckpoint_failure       = script_output("cat /root/commands_history | tail -3 | head -1");
-        my @involved_failure_guest     = grep { $uncheckpoint_failure =~ /$_/img } (keys %xen::guests);
+        my @involved_failure_guest     = grep { $uncheckpoint_failure =~ /$_/img } (keys %virt_autotest::common::guests);
         my $uncheckpoint_failure_guest = "";
         if (!scalar @involved_failure_guest) {
             $uncheckpoint_failure_guest = "NO SPECIFIC TEST GUEST INVOLVED";
@@ -134,15 +150,41 @@ sub analyzeResult {
         $self->{test_results}->{$uncheckpoint_failure_guest}->{$uncheckpoint_failure}->{status} = 'FAILED';
         $self->{test_results}->{$uncheckpoint_failure_guest}->{$uncheckpoint_failure}->{error}  = $uncheckpoint_failure_error;
     }
+
+    if ($status eq 'PASSED' and !defined $self->{test_results}) {
+        $self->{test_results}->{'ALL GUESTS'}->{'ALL TESTS'}->{status} = 'PASSED';
+        $self->{test_results}->{'ALL GUESTS'}->{'ALL TESTS'}->{error}  = 'NONE';
+    }
 }
 
 sub post_fail_hook {
     my ($self) = shift;
+
     $self->{"stop_run"} = time();
     assert_script_run("history -w /root/commands_history");
+    virt_utils::stop_monitor_guest_console() if (!(get_var("TEST", '') =~ /qam/) && (is_xen_host() || is_kvm_host()));
     #(caller(0))[3] can help pass calling subroutine name into called subroutine
     $self->junit_log_provision((caller(0))[3]) if get_var("VIRT_AUTOTEST");
-    $self->SUPER::post_fail_hook;
+    collect_virt_system_logs();
+
+    virt_utils::collect_host_and_guest_logs;
+    upload_logs("/var/log/clean_up_virt_logs.log");
+    save_screenshot;
+    upload_logs("/var/log/guest_console_monitor.log");
+    save_screenshot;
+    script_run("rm -f -r /var/log/clean_up_virt_logs.log /var/log/guest_console_monitor.log");
+    save_screenshot;
+    $self->upload_coredumps;
+    save_screenshot;
+}
+
+sub get_virt_disk_and_available_space {
+    # ensure the available disk space size for virt disk - /var/lib/libvirt
+    my $virt_disk_name      = script_output 'lsblk -rnoPKNAME $(findmnt -nrvoSOURCE /var/lib/libvirt)';
+    my $virt_available_size = script_output("df -k | grep libvirt | awk '{print \$4}'");
+    # default available virt disk unit as GiB
+    $virt_available_size = int($virt_available_size / 1048576);
+    return ($virt_disk_name, $virt_available_size);
 }
 
 1;

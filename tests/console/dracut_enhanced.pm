@@ -7,6 +7,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: dracut
 # Summary: Run dracut testsuite
 # - Test suitable only for dracut 0.44 (SLE12SP2+)
 # - Fetches a tarball containing patches to be applied to dracut tests
@@ -30,11 +31,18 @@ use version_utils 'is_sle';
 sub run {
     select_console 'root-console';
     my $dracut_test = get_var('DRACUT_TEST');
+    # dracut on SLE15SP2 was updated to 049
+    my $dracut_version = "dracut-patches.tar.gz";
+    if (is_sle('>=15-SP2')) {
+        $dracut_version = "dracut-patches-SLE15SP2.tar.gz";
+        # Enable source repositories (not needed 12SP2 ~ 15SP1)
+        assert_script_run 'for r in `zypper lr|awk \'/Source-Pool/ {print $5}\'`;do zypper mr -e --refresh $r;done';
+    }
     if (is_sle('<12-SP2')) {
         die "Unsupported dracut version";
     }
     else {
-        assert_script_run 'curl -v -o /tmp/dracut-patches.tar.gz ' . data_url('qam/dracut/dracut-patches.tar.gz');
+        assert_script_run "curl -v -o /tmp/dracut-patches.tar.gz " . data_url("qam/dracut/$dracut_version");
         assert_script_run 'tar xvf /tmp/dracut-patches.tar.gz -C /tmp';
         zypper_call "in rpmbuild dhcp-client strace";
         zypper_call "si -D dracut";
@@ -48,9 +56,9 @@ sub run {
         assert_script_run "./test.sh --setup |& tee /tmp/logs/$dracut_test-setup.log", 300;
         assert_script_run "grep -q dracut-root-block-created /tmp/logs/$dracut_test-setup.log";
         power_action('reboot', textmode => 1);
-        sleep 10;
+        wait_still_screen(10, 60);
         assert_screen("linux-login", 600);
-        type_string "root\n";
+        enter_cmd "root";
         wait_still_screen 3;
         type_password;
         wait_still_screen 3;

@@ -23,7 +23,7 @@ use strict;
 use warnings;
 use utils;
 use testapi;
-use version_utils qw(is_sle is_opensuse is_vmware);
+use version_utils qw(is_sle is_opensuse is_tumbleweed is_vmware is_jeos);
 use Carp 'croak';
 
 our @EXPORT = qw(
@@ -41,8 +41,8 @@ our @EXPORT = qw(
 
 Need to kill ssh connection with backends like ipmi, spvm, pvm_hmc, s390x.
 
-For s390_zkvm or xen, assign console($vnc_console) with C<disable_vnc_stalls> 
-and assign console('svirt') with C<stop_serial_grab>. 
+For s390_zkvm or xen, assign console($vnc_console) with C<disable_vnc_stalls>
+and assign console('svirt') with C<stop_serial_grab>.
 
 $vnc_console get required variable 'SVIRT_VNC_CONSOLE' before assignment.
 
@@ -59,11 +59,13 @@ sub prepare_system_shutdown {
         }
         console('installation')->disable_vnc_stalls;
     }
+
     if (check_var('VIRSH_VMM_FAMILY', 'xen') || get_var('S390_ZKVM')) {
         my $vnc_console = get_required_var('SVIRT_VNC_CONSOLE');
         console($vnc_console)->disable_vnc_stalls;
         console('svirt')->stop_serial_grab;
     }
+    return undef;
 }
 
 =head2 reboot_x11
@@ -79,15 +81,21 @@ sub reboot_x11 {
     my ($self) = @_;
     wait_still_screen;
     if (check_var('DESKTOP', 'gnome')) {
-        send_key_until_needlematch 'logoutdialog', 'ctrl-alt-delete', 7, 10;    # reboot
+        if (is_tumbleweed) {
+            assert_and_click('reboot-power-icon');
+            assert_and_click('reboot-power-menu');
+            assert_and_click('reboot-click-restart');
+        } else {
+            send_key_until_needlematch 'logoutdialog', 'ctrl-alt-delete', 7, 10;    # reboot
+        }
         my $repetitions = assert_and_click_until_screen_change 'logoutdialog-reboot-highlighted';
         record_soft_failure 'poo#19082' if ($repetitions > 0);
-
         if (get_var("SHUTDOWN_NEEDS_AUTH")) {
+
             assert_screen 'shutdown-auth';
-            wait_still_screen(3);                                               # 981299#c41
+            wait_still_screen(3);                                                   # 981299#c41
             type_string $testapi::password, max_interval => 5;
-            wait_still_screen(3);                                               # 981299#c41
+            wait_still_screen(3);                                                   # 981299#c41
             if (get_var('REBOOT_DEBUG')) {
                 wait_screen_change {
                     # Extra assert_and_click (with right click) to check the correct number of characters is typed and open up the 'show text' option
@@ -113,7 +121,7 @@ sub reboot_x11 {
 
 Power off desktop.
 
-Handle each desktop differently for kde, gnome, xfce, lxde, lxqt, enlightenment, awesome, mate, minimalx. 
+Handle each desktop differently for kde, gnome, xfce, lxde, lxqt, enlightenment, awesome, mate, minimalx.
 
 Work around issue with CD-ROM pop-up: bsc#1137230 and make sure that s390 SUT shutdown correctly.
 
@@ -150,7 +158,7 @@ sub poweroff_x11 {
         wait_screen_change { type_string "\t\t" };    # select shutdown
 
         # assert_screen 'test-shutdown-1', 3;
-        type_string "\n";
+        send_key 'ret';
     }
 
     if (check_var("DESKTOP", "lxde")) {
@@ -195,7 +203,6 @@ sub poweroff_x11 {
     if (check_var("DESKTOP", "mate")) {
         x11_start_program("mate-session-save --shutdown-dialog", valid => 0);
         send_key "ctrl-alt-delete";    # shutdown
-        assert_screen 'mate_logoutdialog', 15;
         assert_and_click 'mate_shutdown_btn';
     }
 
@@ -223,7 +230,7 @@ sub handle_livecd_reboot_failure {
     if (match_has_tag('generic-desktop-after_installation')) {
         record_soft_failure 'boo#993885 Kde-Live net installer does not reboot after installation';
         select_console 'install-shell';
-        type_string "reboot\n";
+        enter_cmd "reboot";
         save_screenshot;
     }
 }
@@ -232,14 +239,14 @@ sub handle_livecd_reboot_failure {
 
  power_action($action [,observe => $observe] [,keepconsole => $keepconsole] [,textmode => $textmode]);
 
-Executes the selected power action (e.g. poweroff, reboot). 
+Executes the selected power action (e.g. poweroff, reboot).
 
 If C<$observe> is set, the function expects that the specified C<$action> was already executed by
-another actor and the function just makes sure the system shuts down, restarts etc. properly. 
+another actor and the function just makes sure the system shuts down, restarts etc. properly.
 
-C<$keepconsole> prevents a console change, which we do by default to make sure that a system with a GUI 
-desktop which was in text console at the time of C<power_action> call, is switched to the expected 
-console, that is 'root-console' for textmode, 'x11' otherwise. The actual execution happens in a shell 
+C<$keepconsole> prevents a console change, which we do by default to make sure that a system with a GUI
+desktop which was in text console at the time of C<power_action> call, is switched to the expected
+console, that is 'root-console' for textmode, 'x11' otherwise. The actual execution happens in a shell
 for textmode or with GUI commands otherwise unless explicitly overridden by setting C<$textmode> to either 0 or 1.
 
 =cut
@@ -256,7 +263,7 @@ sub power_action {
     }
     unless ($args{observe}) {
         if ($args{textmode}) {
-            type_string "$action\n";
+            enter_cmd "$action";
         }
         else {
             if ($action eq 'reboot') {
@@ -266,7 +273,7 @@ sub power_action {
                 if (check_var('BACKEND', 's390x')) {
                     record_soft_failure('poo#58127 - Temporary workaround, because shutdown module is marked as failed on s390x backend when shutting down from GUI.');
                     select_console 'root-console';
-                    type_string "$action\n";
+                    enter_cmd "$action";
                 }
                 else {
                     poweroff_x11;
@@ -325,8 +332,9 @@ sub power_action {
             console('svirt')->start_serial_grab;
         }
         # When 'sut' is ready, select it
+        # GRUB's serial terminal configuration relies on installation/add_serial_console.pm
         if (is_vmware && $action eq 'reboot') {
-            wait_serial('GNU GRUB', 180) || die 'GRUB not found on serial console';
+            die 'GRUB not found on serial console' unless (is_jeos || wait_serial('GNU GRUB', 180));
             select_console('sut');
         }
     }
@@ -336,8 +344,8 @@ sub power_action {
 
  assert_shutdown_and_restore_system($action, $shutdown_timeout);
 
-VNC connection to SUT (the 'sut' console) is terminated on Xen via svirt backend 
-and we have to re-connect *after* the restart, otherwise we end up with stalled 
+VNC connection to SUT (the 'sut' console) is terminated on Xen via svirt backend
+and we have to re-connect *after* the restart, otherwise we end up with stalled
 VNC connection. The tricky part is to know *when* the system is already booting.
 
 Default $action is reboot, $shutdown_timeout is timeout for shutdown, default value is 60 seconds.
@@ -359,9 +367,9 @@ sub assert_shutdown_and_restore_system {
         my $svirt = console('svirt');
         # Set disk as a primary boot device
         if (check_var('ARCH', 's390x') or get_var('NETBOOT')) {
-            $svirt->change_domain_element(os => initrd  => undef);
-            $svirt->change_domain_element(os => kernel  => undef);
-            $svirt->change_domain_element(os => cmdline => undef);
+            $svirt->change_domain_element(os        => initrd  => undef);
+            $svirt->change_domain_element(os        => kernel  => undef);
+            $svirt->change_domain_element(os        => cmdline => undef);
             $svirt->change_domain_element(on_reboot => undef);
             $svirt->define_and_start;
         }
@@ -378,8 +386,8 @@ sub assert_shutdown_and_restore_system {
 
  $args = {[timeout => $timeout] [,soft_timeout => $soft_timeout] [,bugref => $bugref] [,soft_failure_reason => $soft_failure_reason]}
 
-Extending assert_shutdown with a soft timeout. When C<$args->{soft_timeout}> is reached, 
-a soft failure is recorded with the message C<$args->{soft_failure_reason}>. 
+Extending assert_shutdown with a soft timeout. When C<$args->{soft_timeout}> is reached,
+a soft failure is recorded with the message C<$args->{soft_failure_reason}>.
 
 After that, assert_shutdown continues until the (hard) timeout C<$args->{timeout}> is hit.
 

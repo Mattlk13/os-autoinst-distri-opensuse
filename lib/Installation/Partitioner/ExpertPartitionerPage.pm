@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright © 2019 SUSE LLC
+# Copyright © 2019-2021 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -10,7 +10,7 @@
 # Summary: The class introduces all accessing methods for Expert Partitioner
 # Page, that are common for all the versions of the page (e.g. for both
 # Libstorage and Libstorage-NG).
-# Maintainer: Oleksandr Orlov <oorlov@suse.de>
+# Maintainer: QE YaST <qa-sle-yast@suse.de>
 
 package Installation::Partitioner::ExpertPartitionerPage;
 use strict;
@@ -19,20 +19,21 @@ use testapi;
 use parent 'Installation::WizardPage';
 
 use constant {
-    EXPERT_PARTITIONER_PAGE    => 'expert-partitioner',
-    SELECTED_HARD_DISK         => 'partitioning_raid-disk_%s-selected',
-    SELECTED_RAID              => 'partitioning_raid-raid-selected',
-    SELECTED_VOLUME_MANAGEMENT => 'volume_management_feature',
-    SELECTED_HARD_DISKS        => 'partitioning_raid-hard_disks-selected',
-    SELECTED_EXISTING_PART     => 'partitioning_existing_part_%s-selected',
-    CLONE_PARTITION            => 'clone_partition',
-    ALL_DISKS_SELECTED         => 'all_disks_selected',
-    PARTITIONS_TAB             => 'partitions_tab_selected',
-    OVERVIEW_TAB               => 'overview_tab_selected',
-    NEW_PARTITION_TABLE_TYPE   => 'new_partition_table_type',
-    SELECTED_CREATE_NEW_TABLE  => 'selected_create_new_table',
-    DELETING_CURRENT_DEVICES   => 'deleting_current_devices',
-    NEW_PARTITION_TYPE         => 'partition-type'
+    EXPERT_PARTITIONER_PAGE            => 'expert-partitioner',
+    SELECTED_HARD_DISK                 => 'partitioning_raid-disk_%s-selected',
+    SELECTED_RAID                      => 'partitioning_raid-raid-selected',
+    SELECTED_CURRENT_VOLUME_MANAGEMENT => 'volume-management_system',                 # current proposal
+    SELECTED_VOLUME_MANAGEMENT         => 'volume_management_feature',                # existing partition
+    SELECTED_HARD_DISKS                => 'partitioning_raid-hard_disks-selected',
+    SELECTED_EXISTING_PART             => 'partitioning_existing_part_%s-selected',
+    CLONE_PARTITION                    => 'clone_partition',
+    ALL_DISKS_SELECTED                 => 'all_disks_selected',
+    PARTITIONS_TAB                     => 'partitions_tab_selected',
+    OVERVIEW_TAB                       => 'overview_tab_selected',
+    NEW_PARTITION_TABLE_TYPE           => 'new_partition_table_type',
+    SELECTED_CREATE_NEW_TABLE          => 'selected_create_new_table',
+    DELETING_CURRENT_DEVICES           => 'deleting_current_devices',
+    NEW_PARTITION_TYPE                 => 'partition-type'
 };
 
 sub new {
@@ -61,6 +62,16 @@ sub _select_system_view_section {
     send_key('alt-s');
 }
 
+=head2 select_item_in_system_view_table
+
+  select_item_in_system_view_table($item);
+
+Selects one of the features of System View in the Expert Partitioner with any of the 
+available options. Each option should find a constant variable representing a needle tag to match.
+Default for C<$item> is to match a hard disk with tag partitioning_raid-disk_%s-selected where this
+will interpolated by the test_data variable of C<existing_partition>.
+=cut
+
 sub select_item_in_system_view_table {
     my ($self, $item) = @_;
     assert_screen(EXPERT_PARTITIONER_PAGE);
@@ -72,11 +83,11 @@ sub select_item_in_system_view_table {
     elsif ($item eq 'volume-management') {
         send_key_until_needlematch(SELECTED_VOLUME_MANAGEMENT, 'down');
     }
+    elsif ($item eq 'current-volume-management') {
+        send_key_until_needlematch(SELECTED_CURRENT_VOLUME_MANAGEMENT, 'down');
+    }
     elsif ($item eq 'hard-disks') {
         send_key_until_needlematch(SELECTED_HARD_DISKS, 'down');
-    }
-    elsif ($item eq 'existing-partition') {
-        send_key_until_needlematch((sprintf SELECTED_EXISTING_PART, $item), "down");
     }
     else {
         send_key_until_needlematch((sprintf SELECTED_HARD_DISK, $item), "down");

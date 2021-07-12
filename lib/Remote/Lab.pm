@@ -40,7 +40,7 @@ sub setup_vpn {
 }
 
 sub connect_vpn {
-    my ($self) = @_;
+    my ($self)       = @_;
     my $vpn_username = get_required_var('VPN_USERNAME');
     my $vpn_endpoint = get_var('VPN_ENDPOINT', 'asa003b.centers.ihost.com');
     my $vpn_group    = get_var('VPN_GROUP',    'ACC');
@@ -77,7 +77,7 @@ sub setup_ssh_tunnels {
     # but on the remote host. The port is computed as QEMUPORT + 1
     my $upload_port = get_required_var('QEMUPORT') + 1;
     my $jumpbox     = get_var('JUMPBOX_HOSTNAME', '129.40.13.66');
-    my $sut         = get_var('SUT_HOSTNAME', '10.3.1.111');
+    my $sut         = get_var('SUT_HOSTNAME',     '10.3.1.111');
     my $upload_host = testapi::host_ip();
     type_string "cat - > .ssh/config <<EOF
 Host jumpbox

@@ -16,7 +16,8 @@ use Mojo::Base 'publiccloud::provider';
 use Mojo::JSON qw(decode_json encode_json);
 use Term::ANSIColor 2.01 'colorstrip';
 use Data::Dumper;
-use testapi;
+use testapi qw(is_serial_terminal :DEFAULT);
+use utils qw(script_output_retry);
 
 has tenantid        => undef;
 has subscription    => undef;
@@ -43,6 +44,7 @@ sub init {
     $self->SUPER::init();
     $self->vault_create_credentials() unless ($self->key_id);
     $self->az_login();
+    assert_script_run("az account set --subscription " . $self->subscription);
     assert_script_run("export ARM_SUBSCRIPTION_ID=" . $self->subscription);
     assert_script_run("export ARM_CLIENT_ID=" . $self->key_id);
     assert_script_run("export ARM_CLIENT_SECRET=" . $self->key_secret);
@@ -52,17 +54,14 @@ sub init {
 }
 
 sub az_login {
-    my ($self)    = @_;
-    my $max_tries = 3;
-    my $login_cmd = sprintf('az login --service-principal -u %s -p %s -t %s',
+    my ($self) = @_;
+    my $login_cmd = sprintf(q(while ! az login --service-principal -u '%s' -p '%s' -t '%s'; do sleep 10; done),
         $self->key_id, $self->key_secret, $self->tenantid);
-
-    for (1 .. $max_tries) {
-        my $ret = script_run($login_cmd);
-        return 1 if (defined($ret) && $ret == 0);
-        sleep 30;
-    }
-    die("Azure login failed!");
+    assert_script_run($login_cmd, timeout => 5 * 60);
+    #Azure infra need some time to propagate given by Vault credentials
+    # Running some verification command does not prove anything because
+    # at the beginning failures can happening sporadically
+    sleep(get_var('AZURE_LOGIN_WAIT_SECONDS', 0));
 }
 
 sub vault_create_credentials {
@@ -84,8 +83,17 @@ sub vault_create_credentials {
 
 sub resource_exist {
     my ($self) = @_;
-    my $output = script_output(q(az group list --query "[?name=='openqa-upload']"));
+    my $group  = $self->resource_group;
+    my $output = script_output_retry("az group show --name '$group' --output json", retry => 3, timeout => 30, delay => 10);
     return ($output ne '[]');
+}
+
+sub get_image_id {
+    my ($self, $img_url) = @_;
+    $img_url //= get_var('PUBLIC_CLOUD_IMAGE_LOCATION');
+    # Very special case for Azure. Ignore the image id and only use OFFER and SKU
+    return "" if ((!$img_url) && get_var('PUBLIC_CLOUD_AZURE_OFFER') && get_var('PUBLIC_CLOUD_AZURE_SKU'));
+    return $self->SUPER::get_image_id($img_url);
 }
 
 sub find_img {
@@ -188,7 +196,22 @@ sub img_proof {
     $args{user}          //= 'azureuser';
     $args{provider}      //= 'azure';
 
+    if (my $parsed_id = $self->parse_instance_id($args{instance})) {
+        $args{running_instance_id} = $parsed_id->{vm_name};
+    }
+
     return $self->run_img_proof(%args);
+}
+
+sub terraform_apply {
+    my ($self, %args) = @_;
+    $args{vars} //= {};
+    my $offer = get_var("PUBLIC_CLOUD_AZURE_OFFER");
+    my $sku   = get_var("PUBLIC_CLOUD_AZURE_SKU");
+    $args{vars}->{offer} = $offer if ($offer);
+    $args{vars}->{sku}   = $sku   if ($sku);
+
+    $self->SUPER::terraform_apply(%args);
 }
 
 sub on_terraform_apply_timeout {
@@ -221,11 +244,16 @@ sub on_terraform_apply_timeout {
             $tries = 0;
         };
         if ($@) {
-            type_string(qq(\c\\));
+            if (is_serial_terminal()) {
+                type_string(qq(\c\\));    # Send QUIT signal
+            }
+            else {
+                send_key('ctrl-\\');      # Send QUIT signal
+            }
         }
     }
 
-    assert_script_run("az group delete --yes --no-wait --name $resgroup");
+    assert_script_run("az group delete --yes --no-wait --name $resgroup") unless get_var('PUBLIC_CLOUD_NO_CLEANUP_ON_FAILURE');
 }
 
 sub on_terraform_destroy_timeout {
@@ -242,8 +270,8 @@ sub on_terraform_destroy_timeout {
 sub get_state_from_instance
 {
     my ($self, $instance) = @_;
-    my $name = $instance->instance_id();
-    my $out = decode_azure_json(script_output("az vm get-instance-view --name $name --resource-group $name --query instanceView.statuses[1] --output json", quiet => 1));
+    my $id  = $instance->instance_id();
+    my $out = decode_azure_json(script_output("az vm get-instance-view --ids '$id' --query instanceView.statuses[1] --output json", quiet => 1));
     die("Expect PowerState but got " . $out->{code}) unless ($out->{code} =~ m'PowerState/(.+)$');
     return $1;
 }
@@ -251,9 +279,9 @@ sub get_state_from_instance
 sub get_ip_from_instance
 {
     my ($self, $instance) = @_;
-    my $name = $instance->instance_id();
+    my $id = $instance->instance_id();
 
-    my $out = decode_azure_json(script_output("az vm list-ip-addresses --name $name --resource-group $name", quiet => 1));
+    my $out = decode_azure_json(script_output("az vm list-ip-addresses --ids '$id'", quiet => 1));
     return $out->[0]->{virtualMachine}->{network}->{publicIpAddresses}->[0]->{ipAddress};
 }
 
@@ -263,27 +291,45 @@ sub stop_instance
     # We assume that the instance_id on azure is actually the name
     # which is equal to the resource group
     # TODO maybe we need to change the azure.tf file to retrieve the id instead of the name
-    my $name     = $instance->instance_id();
+    my $id       = $instance->instance_id();
     my $attempts = 60;
 
     die('Outdated instance object') if ($self->get_ip_from_instance($instance) ne $instance->public_ip);
 
-    assert_script_run("az vm stop --resource-group $name --name $name", quiet => 1);
+    assert_script_run("az vm stop --ids '$id'", quiet => 1);
     while ($self->get_state_from_instance($instance) ne 'stopped' && $attempts-- > 0) {
         sleep 5;
     }
-    die("Failed to stop instance $name") unless ($attempts > 0);
+    die("Failed to stop instance $id") unless ($attempts > 0);
 }
 
 sub start_instance
 {
     my ($self, $instance, %args) = @_;
-    my $name = $instance->instance_id();
+    my $id = $instance->instance_id();
 
     die("Try to start a running instance") if ($self->get_state_from_instance($instance) ne 'stopped');
 
-    assert_script_run("az vm start --name $name --resource-group $name", quiet => 1);
+    assert_script_run("az vm start --ids '$id'", quiet => 1);
     $instance->public_ip($self->get_ip_from_instance($instance));
+}
+
+=head2
+  my $parsed_id = $self->parse_instance_id($instance);
+  say $parsed_id->{vm_name};
+  say $parsed_id->{resource_group};
+
+Extract resource group and vm name from full instance id which looks like
+C</subscriptions/c011786b-59d7-4817-880c-7cd8a6ca4b19/resourceGroups/openqa-suse-de-1ec3f5a05b7c0712/providers/Microsoft.Compute/virtualMachines/openqa-suse-de-1ec3f5a05b7c0712>
+=cut
+sub parse_instance_id
+{
+    my ($self, $instance) = @_;
+
+    if ($instance->instance_id() =~ m'/subscriptions/([^/]+)/resourceGroups/([^/]+)/.+/virtualMachines/(.+)$') {
+        return {subscription => $1, resource_group => $2, vm_name => $3};
+    }
+    return;
 }
 
 1;

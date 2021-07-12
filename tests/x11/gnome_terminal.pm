@@ -8,12 +8,13 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: gnome-terminal
 # Summary: Basic functionality of gnome terminal
 # - Launch "gnome-terminal" and confirm it is running
 # - Open a second tab
 # - Type "If you can see this text gnome-terminal is working."
 # - Close gnome-terminal
-# Maintainer: Oliver Kurz <okurz@suse.de>
+# Maintainer: QE Core <qe-core@suse.de>
 
 use base "x11test";
 use strict;

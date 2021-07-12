@@ -1,4 +1,4 @@
-# Copyright © 2017-2019 SUSE LLC
+# Copyright © 2017-2020 SUSE LLC
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -19,7 +19,7 @@ use base Exporter;
 use Exporter;
 use strict;
 use warnings;
-use testapi qw(check_var get_var set_var);
+use testapi qw(check_var get_var set_var script_output);
 use version 'is_lax';
 use Carp 'croak';
 use Utils::Backends qw(is_hyperv is_hyperv_in_gui is_svirt_except_s390x);
@@ -30,7 +30,8 @@ use constant {
         qw(
           is_sle
           is_pre_15
-          is_caasp
+          is_microos
+          is_sle_micro
           is_gnome_next
           is_jeos
           is_krypton_argon
@@ -48,8 +49,14 @@ use constant {
           is_storage_ng
           is_using_system_role
           is_using_system_role_first_flow
+          is_public_cloud
+          is_leap_migration
           requires_role_selection
-          )
+          check_version
+          get_os_release
+          check_os_release
+          package_version_cmp
+        )
     ],
     BACKEND => [
         qw(
@@ -58,7 +65,7 @@ use constant {
           is_hyperv_in_gui
           is_aarch64_uefi_boot_hdd
           is_svirt_except_s390x
-          )
+        )
     ],
     SCENARIO => [
         qw(
@@ -73,11 +80,13 @@ use constant {
           is_server
           is_transactional
           is_livecd
+          is_quarterly_iso
           has_product_selection
           has_license_on_welcome_screen
           has_license_to_accept
           uses_qa_net_hardware
-          )
+          has_test_issues
+        )
     ]
 };
 
@@ -191,39 +200,48 @@ sub check_version {
     croak "Unsupported version parameter for check_version: '$query'";
 }
 
-=head2 is_caasp
+=head2 is_microos
 
-Check if distribution is CaaSP or MicroOS with optional filter:
+Check if distribution is openSUSE MicroOS with optional filter:
 Media type: DVD (iso) or VMX (all disk images)
-Version: 1.0 | 2.0 | 2.0+
+Version: Tumbleweed | 15.2 (Leap)
 Flavor: DVD | MS-HyperV | XEN | KVM-and-Xen | ..
 =cut
-sub is_caasp {
-    my $filter = shift;
-    my $distri = get_var('DISTRI');
-    return 0 unless $distri && $distri =~ /caasp|microos/;
+sub is_microos {
+    my $filter  = shift;
+    my $distri  = get_var('DISTRI');
+    my $flavor  = get_var('FLAVOR');
+    my $version = get_var('VERSION');
+    return 0 unless $distri && $distri =~ /microos/;
     return 1 unless $filter;
 
+    my $version_is_tw = ($version =~ /Tumbleweed/ || $version =~ /^Staging:/);
+
     if ($filter eq 'DVD') {
-        return get_var('FLAVOR') =~ /DVD/;    # DVD and Staging-?-DVD
+        return $flavor =~ /DVD/;    # DVD and Staging-?-DVD
     }
     elsif ($filter eq 'VMX') {
-        return get_var('FLAVOR') !~ /DVD/;    # If not DVD it's VMX
+        return $flavor !~ /DVD/;    # If not DVD it's VMX
+    }
+    elsif ($filter eq 'Tumbleweed') {
+        return $version_is_tw;
     }
     elsif ($filter =~ /\d\.\d\+?$/) {
         # If we use '+' it means "this or newer", which includes tumbleweed
-        return ($filter =~ /\+$/) if check_var('VERSION', 'Tumbleweed');
-        return check_version($filter, get_var('VERSION'), qr/\d\.\d/);
-    }
-    elsif ($filter =~ /caasp|microos/) {
-        return check_var('DISTRI', $filter);
-    }
-    elsif ($filter =~ /staging/) {
-        return get_var('FLAVOR') =~ /Staging-.-DVD/;
+        return ($filter =~ /\+$/) if $version_is_tw;
+        return check_version($filter, $version, qr/\d{1,}\.\d/);
     }
     else {
-        return check_var('FLAVOR', $filter);    # Specific FLAVOR selector
+        return $flavor eq $filter;    # Specific FLAVOR selector
     }
+}
+
+=head2 is_sle_micro
+
+Check if distribution is SUSE Linux Enterprise Micro
+=cut
+sub is_sle_micro {
+    return check_var('DISTRI', 'sle-micro');
 }
 
 =head2 is_tumbleweed
@@ -234,6 +252,7 @@ sub is_tumbleweed {
     # Tumbleweed and its stagings
     return 0 unless check_var('DISTRI', 'opensuse');
     return 1 if get_var('VERSION') =~ /Tumbleweed/;
+    return 1 if is_gnome_next;
     return get_var('VERSION') =~ /^Staging:/;
 }
 
@@ -248,13 +267,14 @@ sub is_leap {
 
     # Leap and its stagings
     return 0 unless check_var('DISTRI', 'opensuse');
-    return 0 unless $version =~ /^\d{2,}\.\d/;
+    return 0 unless $version =~ /^\d{2,}\.\d/ || $version =~ /^Jump/;
     return 1 unless $query;
 
     # Hacks for staging and HG2G :)
     $query   =~ s/^([<>=]*)42/${1}14/;
     $version =~ s/^42/14/;
     $version =~ s/:(Core|S)[:\w]*//i;
+    $version =~ s/^Jump://i;
 
     return check_version($query, $version, qr/\d{2,}\.\d/);
 }
@@ -290,7 +310,7 @@ sub is_sle {
 Returns true if called on a transactional server
 =cut
 sub is_transactional {
-    return 1 if is_caasp;
+    return 1 if is_microos;
     return check_var('SYSTEM_ROLE', 'serverro');
 }
 
@@ -339,7 +359,7 @@ sub is_hpc {
 Returns true if called on a released build
 =cut
 sub is_released {
-    return get_var('FLAVOR') =~ /Incidents/ || get_var('FLAVOR') =~ /Updates/;
+    return get_var('FLAVOR') =~ /Incidents|Updates|QR/;
 }
 
 
@@ -467,7 +487,7 @@ sub is_using_system_role {
     return is_sle('>=12-SP2') && is_sle('<15')
       && check_var('ARCH', 'x86_64')
       && is_server()
-      && (!is_sles4sap() || is_sles4sap_standard())
+      && (!is_sles4sap()         || is_sles4sap_standard())
       && (install_this_version() || install_to_other_at_least('12-SP2'))
       || (is_sles4sap() && main_common::is_updates_test_repo())
       || is_sle('=15')
@@ -527,7 +547,7 @@ configuration, otherwise returns false (0).
 
 =cut
 sub has_license_on_welcome_screen {
-    return 1 if is_caasp('caasp');
+    return 1 if is_sle_micro;
     return get_var('HASLICENSE') &&
       (((is_sle('>=15-SP1') && get_var('BASE_VERSION') && !get_var('UPGRADE')) && is_s390x())
         || is_sle('<15')
@@ -548,4 +568,148 @@ Returns true if the SUT uses qa net hardware
 =cut
 sub uses_qa_net_hardware {
     return !check_var("IPXE", "1") && check_var("BACKEND", "ipmi") || check_var("BACKEND", "generalhw");
+}
+
+=head2 get_os_release
+
+Get SLE release version, service pack and distribution name info from any running sles os without any dependencies
+It parses the info from /etc/os-release file, which can reside in any physical host or virtual machine
+The file can also be placed anywhere as long as it can be reached somehow by its absolute file path,
+which should be passed in as the second argument os_release_file, for example, "/etc/os-release"
+At the same time, connection method to the entity in which the file reside should be passed in as the
+firt argument go_to_target, for example, "ssh root at name or ip address" or "way to download the file"
+For use only on locahost, no argument needs to be specified
+=cut
+sub get_os_release {
+    my ($go_to_target, $os_release_file) = @_;
+    $go_to_target    //= '';
+    $os_release_file //= '/etc/os-release';
+    my %os_release = script_output("$go_to_target cat $os_release_file") =~ /^([^#]\S+)="?([^"\r\n]+)"?$/gm;
+    %os_release = map { uc($_) => $os_release{$_} } keys %os_release;
+    ($os_release{VERSION}) = $os_release{VERSION} =~ /(^\d+\S*\d*)/im;
+    my ($os_version, $os_service_pack) = split(/\.|-sp/i, $os_release{VERSION});
+    $os_service_pack //= 0;
+    return $os_version, $os_service_pack, $os_release{ID};
+}
+
+=head2 check_os_release
+
+Identify running os without any dependencies parsing the I</etc/os-release>.
+
+=item C<distri_name>
+
+The expected distribution name to compare.
+
+=item C<line>
+
+The line we'll be parsing and checking.
+
+=item C<go_to_target>
+
+Command connecting to the SUT
+
+=item C<os_release_file>
+
+The full path to the Operating system identification file.
+Default to I</etc/os-release>.
+
+Returns 1 (true) if the ID_LIKE variable contains C<distri_name>.
+
+=cut
+sub check_os_release {
+    my ($distri_name, $line, $go_to_target, $os_release_file) = @_;
+    die '$distri_name is not given' unless $distri_name;
+    die '$line is not given'        unless $line;
+    $go_to_target    //= '';
+    $os_release_file //= '/etc/os-release';
+    my $os_like_name = script_output("$go_to_target grep -e \"^$line\\b\" ${os_release_file} | cut -d'\"' -f2");
+    return ($os_like_name =~ /$distri_name/i);
+}
+
+=head2 is_public_cloud
+
+Returns true if PUBLIC_CLOUD is set to 1
+=cut
+
+sub is_public_cloud {
+    return get_var('PUBLIC_CLOUD');
+}
+
+=head2 is_leap_migration
+
+Returns true if called in a leap to sle migration scenario
+=cut
+sub is_leap_migration {
+    return is_upgrade && get_var('ORIGIN_SYSTEM_VERSION') =~ /leap/;
+}
+
+=head2 has_test_issues
+
+Returns true if test issues are present (i.e. is update tests are present)
+
+=cut
+
+sub has_test_issues() {
+    if (is_opensuse) {
+        return 1 if (get_var('OS_TEST_ISSUES') ne "");
+    } elsif (is_sle) {
+        return 1 if (get_var('BASE_TEST_ISSUES') ne "");
+        return 1 if (get_var('CONTM_TEST_ISSUES') ne "");
+        return 1 if (get_var('DESKTOP_TEST_ISSUES') ne "");
+        return 1 if (get_var('LEGACY_TEST_ISSUES') ne "");
+        return 1 if (get_var('OS_TEST_ISSUES') ne "");
+        return 1 if (get_var('PYTHON2_TEST_ISSUES') ne "");
+        return 1 if (get_var('SCRIPT_TEST_ISSUES') ne "");
+        return 1 if (get_var('SDK_TEST_ISSUES') ne "");
+        return 1 if (get_var('SERVERAPP_TEST_ISSUES') ne "");
+        return 1 if (get_var('WE_TEST_ISSUES') ne "");
+    }
+    return 0;
+}
+
+=head2 package_version_cmp
+
+Compare two SUSE-style version strings. Returns an integer that is less than,
+equal to, or greater than zero if the first argument is less than, equal to,
+or greater than the second one, respectively.
+
+=cut
+
+sub package_version_cmp {
+    my ($ver1, $ver2) = @_;
+
+    my @chunks1   = split(/-/, $ver1);
+    my @chunks2   = split(/-/, $ver2);
+    my $chunk_cnt = $#chunks1 > $#chunks2 ? scalar @chunks1 : scalar @chunks2;
+
+    for (my $cid = 0; $cid < $chunk_cnt; $cid++) {
+        my @tokens1   = split(/\./, $chunks1[$cid] // '0');
+        my @tokens2   = split(/\./, $chunks2[$cid] // '0');
+        my $token_cnt = scalar @tokens1;
+        $token_cnt = scalar @tokens2 if $#tokens2 > $#tokens1;
+
+        for (my $tid = 0; $tid < $token_cnt; $tid++) {
+            my $tok1 = $tokens1[$tid] // '0';
+            my $tok2 = $tokens2[$tid] // '0';
+
+            if ($tok1 =~ m/^\d+$/ && $tok2 =~ m/^\d+$/) {
+                next if $tok1 == $tok2;
+                return $tok1 - $tok2;
+            } else {
+                next     if $tok1 eq $tok2;
+                return 1 if $tok1 gt $tok2;
+                return -1;
+            }
+        }
+    }
+
+    return 0;
+}
+
+=head2 is_quarterly_iso
+
+Returns true if called in quaterly iso testing
+=cut
+sub is_quarterly_iso {
+    return 1 if get_var('FLAVOR', '') =~ /QR/;
 }

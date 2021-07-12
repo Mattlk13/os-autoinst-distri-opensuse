@@ -8,6 +8,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: yast2-nfs-client nfs-client
 # Summary: yast2_nfs_client module
 #   Ensures that it works with the current version of nfs-client (it got broken
 #   with the conversion from init.d to systemd services)
@@ -17,7 +18,7 @@
 #   * We test mount and umount and we check for the version
 #   * We try to read and write some forbiden files
 #   * We download 1GB file and check it's checksum
-# Maintainer: Oliver Kurz <okurz@suse.de>
+# Maintainer: QA SLE YaST team <qa-sle-yast@suse.de>
 
 use base "y2_module_consoletest";
 
@@ -54,7 +55,7 @@ sub run {
         assert_script_run 'mkdir -p /tmp/nfs/server';
         assert_script_run 'echo "success" > /tmp/nfs/server/file.txt';
         # Serve the share
-        assert_script_run 'echo "/tmp/nfs/server *(ro)" >> /etc/exports';
+        assert_script_run 'echo "/tmp/nfs/server *(ro,fsid=23)" >> /etc/exports';
         systemctl 'start nfs-server';
         assert_script_run "showmount -e localhost";
     }
@@ -68,7 +69,7 @@ sub run {
 
     my $module_name = y2_module_consoletest::yast2_console_exec(yast2_module => 'nfs-client');
 
-    assert_screen 'yast2-nfs-client-shares';
+    assert_screen 'yast2-nfs-client-shares', 60;
     send_key 'alt-a';
     assert_screen 'yast2-nfs-client-add';
     type_string get_var('NFSCLIENT') ? '10.0.2.101' : 'localhost';

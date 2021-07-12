@@ -3,6 +3,7 @@ description:    >
     Maintainer: jrauch
     Extra tests about software in sdk on gnome
 schedule:
+    - installation/bootloader_start
     - boot/boot_to_desktop
     - console/prepare_test_data
     - console/consoletest_setup

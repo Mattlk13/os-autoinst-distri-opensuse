@@ -6,6 +6,7 @@
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved. This file is offered as-is,
 # without any warranty.
+# Package: sqlite3 expect perl
 # Summary: Test sqlite3 package
 #   These tests use the sqlite3 commandline tool to test various SQL:
 #   * CREATE/ALTER TABLE, CREATE INDEX, CREATE VIEW, CREATE TRIGGER
@@ -28,7 +29,7 @@ sub run {
     my ($self) = @_;
     $self->select_serial_terminal;
 
-    zypper_call('install sqlite3 expect');
+    zypper_call('install sqlite3 expect perl');
 
     my $archive = "sqlite3-tests.data";
     assert_script_run(

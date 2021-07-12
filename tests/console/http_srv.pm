@@ -8,13 +8,14 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: apache2
 # Summary: Simple apache server test
 # - Install apache2
 # - Enable apache2 service
 # - Start apache2 service
 # - Check status of apache2 service
 # - Create index.html, connect to apache instance, check page
-# Maintainer: Oliver Kurz <okurz@suse.de>
+# Maintainer: QE Core <qe-core@suse.de>
 
 package http_srv;
 use services::apache;

@@ -1,12 +1,13 @@
 # SUSE's openQA tests
 #
-# Copyright © 2016-2018 SUSE LLC
+# Copyright © 2016-2021 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: yast2
 # Summary: YaST logic on Network Restart while no config changes were made
 # - Launch xterm as root, stop firewalld
 # - Put network in debug mode (DEBUG="yes" on /etc/sysconfig/network/config)
@@ -18,7 +19,7 @@
 # - Check the network status for each device (if network was restarted after
 # changes made)
 # - Delete all created devices
-# Maintainer: Joaquín Rivera <jeriveramoya@suse.com>
+# Maintainer: QE YaST <qa-sle-yast@suse.de>
 # Tags: fate#318787 poo#11450
 
 use base 'y2_installbase';
@@ -46,7 +47,7 @@ sub add_device {
         send_key_until_needlematch 'yast2_lan_select_eth_card', 'down';
         send_key 'alt-i';    # Edit NIC
         assert_screen 'yast2_lan_network_card_setup';
-        send_key 'alt-k';    # No link (Bonding Slavees)
+        send_key 'alt-k';             # No link (Bonding Slavees)
         send_key 'alt-n';
         assert_screen 'yast2_lan';    # yast2 lan overview tab
     }
@@ -74,7 +75,7 @@ sub add_device {
         send_key 'alt-o';
     }
     elsif ($device eq 'bond') {
-        send_key 'alt-o';             # Bond slaves
+        send_key 'alt-o';                                             # Bond slaves
         assert_screen 'yast2_lan_bond_slaves';
         send_key_until_needlematch 'yast2_lan_bond_slave_tab_selected', 'tab';
         assert_and_click 'yast2_lan_bond_slave_network_interface';    # select network interface
@@ -137,7 +138,7 @@ sub delete_device {
     send_key 'alt-t';    # Delete NIC
     wait_still_screen;
     save_screenshot;
-    send_key 'alt-i';    # Edit NIC
+    send_key 'alt-i';                           # Edit NIC
     assert_screen 'yast2_lan_network_card_setup';
     wait_screen_change { send_key 'alt-y' };    # Dynamic address
     send_key 'alt-n';                           # Next
@@ -150,7 +151,7 @@ sub check_device {
 
     add_device($device);
     select_special_device_tab($device);
-    check_network_status('no_restart', $device);
+    check_network_status('no_restart_or_reload', $device);
     delete_device($device);
 }
 
@@ -164,12 +165,12 @@ sub run {
     }
 
     check_device($_) foreach @devices;
-    type_string "killall xterm\n";
+    enter_cmd "killall xterm";
 }
 
 sub post_fail_hook {
     my ($self) = @_;
-    assert_script_run 'journalctl -b > /tmp/journal', 90;
+    assert_script_run 'journalctl -b -o short-precise > /tmp/journal', 90;
     upload_logs '/tmp/journal';
     $self->SUPER::post_fail_hook;
 }

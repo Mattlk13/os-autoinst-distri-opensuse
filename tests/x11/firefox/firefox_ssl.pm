@@ -8,6 +8,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: MozillaFirefox
 # Summary: Case#1436067: Firefox: SSL Certificate
 # - Launch xterm, kill firefox, cleanup previous firefox configuration, launch
 # firefox
@@ -39,8 +40,8 @@ sub run {
     send_key "tab";
     send_key 'spc';
     send_key_until_needlematch 'firefox-ssl-risk-accept-and-continue-button-selected', 'tab', 7, 1;
-    send_key 'spc';
-    if (check_screen 'firefox-ssl-addexception', 5) {
+    assert_and_click('firefox-ssl-risk-accept-and-continue-button-selected');
+    if (check_screen 'firefox-ssl-addexception', 10) {
         send_key 'alt-c';
     }
 
@@ -50,7 +51,7 @@ sub run {
     wait_still_screen 3;
     send_key "n";
     assert_and_click('firefox-preferences-search');
-    type_string "cert\n";
+    enter_cmd "cert";
     assert_and_click('firefox-ssl-preference-view-certificate');
 
     sleep 1;
@@ -80,7 +81,7 @@ sub run {
     wait_screen_change { send_key "esc" };
     send_key "ctrl-w";
 
-    $self->firefox_open_url('https://www.hongkongpost.gov.hk');
+    $self->firefox_open_url('https://untrusted-root.badssl.com/');
     assert_screen('firefox-ssl-connection_untrusted');
 
     # Exit

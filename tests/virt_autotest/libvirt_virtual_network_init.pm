@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright (C) 2019 SUSE LLC
+# Copyright (C) 2019-2020 SUSE LLC
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -25,6 +25,7 @@
 # Maintainer: Leon Guo <xguo@suse.com>
 
 use virt_autotest::virtual_network_utils;
+use virt_autotest::utils;
 use base "virt_feature_test_base";
 use virt_utils;
 use set_config_as_glue;
@@ -32,63 +33,84 @@ use strict;
 use warnings;
 use testapi;
 use utils;
+use version_utils 'is_sle';
+use virt_autotest::utils qw(is_xen_host);
 
 sub run_test {
     my ($self) = @_;
+
+    if (is_xen_host) {
+        #Ensure that there is enough free memory on xen host for virtual network test
+        my $MEM = virt_autotest::virtual_network_utils::get_free_mem();
+        record_info('Detect FREE MEM', $MEM . 'G');
+        assert_script_run("test $MEM -ge 20", fail_message => "The SUT needs at least 20G FREE MEM for virtual network test");
+    }
+
+    #After deployed guest systems, ensure active pool have at least 40GiB(XEN)
+    #or 20GiB(KVM) available disk space on vm host for virtual network test
+    my ($ACTIVE_POOL_NAME, $AVAILABLE_POOL_SIZE) = virt_autotest::virtual_network_utils::get_active_pool_and_available_space();
+    record_info('Detect Active POOL NAME:',    $ACTIVE_POOL_NAME);
+    record_info('Detect Available POOL SIZE:', $AVAILABLE_POOL_SIZE . 'GiB');
+    my $expected_pool_size = get_var('VIRT_EXPECTED_POOLSIZE', (is_xen_host) ? '40' : '20');
+    assert_script_run("test $AVAILABLE_POOL_SIZE -ge $expected_pool_size",
+        fail_message => "The SUT needs at least " . $expected_pool_size . "GiB available space of active pool for virtual network test");
+
+    #Need to reset up environemt - br123 for virt_atuo test due to after
+    #finished guest installation to trigger cleanup step on sles11sp4 vm hosts
+    virt_autotest::virtual_network_utils::restore_standalone() if (is_sle('=11-sp4'));
 
     #Enable libvirt debug log
     virt_autotest::virtual_network_utils::enable_libvirt_log();
 
     #VM HOST SSH SETUP
-    virt_autotest::virtual_network_utils::ssh_setup();
+    virt_autotest::utils::ssh_setup();
+
+    #Backup file /etc/hosts before virtual network testing
+    virt_autotest::virtual_network_utils::hosts_backup();
 
     #Install required packages
-    zypper_call '-t in iproute2 iptables iputils bind-utils sshpass';
-
-    #Check with Guest status before libvirt virtual network tests
-    virt_autotest::virtual_network_utils::check_guest_status();
+    zypper_call '-t in iproute2 iptables iputils bind-utils sshpass nmap';
 
     #Prepare Guests
-    foreach my $guest (keys %xen::guests) {
+    foreach my $guest (keys %virt_autotest::common::guests) {
         #Archive deployed Guests
+        #NOTE: Keep Archive deployed Guests for restore_guests func
         assert_script_run("virsh dumpxml $guest > /tmp/$guest.xml");
         upload_logs "/tmp/$guest.xml";
-        #Start installed Guests
-        assert_script_run("virsh start $guest", 60);
-        #Wait for forceful boot up guests
-        sleep 60;
-        #Get the Guest IP Address for bootup guest
-        my $mac_guest = script_output("virsh domiflist $guest | grep br123 | grep -oE \"[[:xdigit:]]{2}(:[[:xdigit:]]{2}){5}\"");
-        script_retry "journalctl --no-pager | grep DHCPACK | grep $mac_guest | grep -oE \"([0-9]{1,3}[\.]){3}[0-9]{1,3}\"", delay => 90, retry => 9, timeout => 90;
-        my $gi_guest = script_output("journalctl --no-pager | grep DHCPACK | grep $mac_guest | tail -1 | grep -oE \"([0-9]{1,3}[\.]){3}[0-9]{1,3}\"");
-        #Copy the VM host SSH Key to guest systems
-        exec_and_insert_password("ssh-copy-id -o StrictHostKeyChecking=no -f root\@$gi_guest");
+        #Used with attach-detach(hotplugging) interface to confirm all virtual network mode
+        #NOTE: Required all guests keep running status
+        #Check that all guests are still running before virtual network tests
+        script_retry("nmap $guest -PN -p ssh | grep open", delay => 30, retry => 6, timeout => 180);
+        save_guest_ip($guest, name => "br123");
+        virt_autotest::utils::ssh_copy_id($guest);
         #Prepare the new guest network interface files for libvirt virtual network
-        assert_script_run("ssh root\@$gi_guest 'cd /etc/sysconfig/network/; cp ifcfg-eth0 ifcfg-eth1; cp ifcfg-eth0 ifcfg-eth2'");
-        assert_script_run("ssh root\@$gi_guest 'rcnetwork restart'", 60);
-        #REDEFINE GUEST NETWORK INTERFACE
-        assert_script_run("virsh detach-interface $guest bridge --mac $mac_guest");
-        assert_script_run("virsh dumpxml $guest > $guest.redefine");
-        upload_logs "$guest.redefine";
-        assert_script_run("rm -rf $guest.redefine");
+        assert_script_run("ssh root\@$guest 'cd /etc/sysconfig/network/; cp ifcfg-eth0 ifcfg-eth1; cp ifcfg-eth0 ifcfg-eth2; cp ifcfg-eth0 ifcfg-eth3; cp ifcfg-eth0 ifcfg-eth4; cp ifcfg-eth0 ifcfg-eth5; cp ifcfg-eth0 ifcfg-eth6'");
+        #enable guest wickedd debugging
+        assert_script_run "ssh root\@$guest \"sed -i 's/^WICKED_DEBUG=.*/WICKED_DEBUG=\"all\"/g' /etc/sysconfig/network/config\"";
+        assert_script_run "ssh root\@$guest 'grep 'WICKED_DEBUG' /etc/sysconfig/network/config'";
+        assert_script_run "ssh root\@$guest \"sed -i 's/^WICKED_LOG_LEVEL=.*/WICKED_LOG_LEVEL=\"debug\"/g' /etc/sysconfig/network/config\"";
+        assert_script_run "ssh root\@$guest 'grep 'WICKED_LOG_LEVEL' /etc/sysconfig/network/config'";
+        if ($guest =~ m/sles-?11/i) {
+            assert_script_run("ssh root\@$guest service network restart", 90);
+            assert_script_run("ssh root\@$guest service wickedd restart", 90);
+        } else {
+            assert_script_run("time ssh -v root\@$guest systemctl restart network", 120);
+            assert_script_run("time ssh -v root\@$guest systemctl restart wickedd", 120);
+        }
     }
 
-    #Destroy existed br123 network interface
-    virt_autotest::virtual_network_utils::destroy_standalone();
-
-    #Restart libvirtd service
-    virt_autotest::virtual_network_utils::restart_libvirtd();
-
+    #Skip restart network service due to bsc#1166570
     #Restart network service
-    virt_autotest::virtual_network_utils::restart_network();
-
+    #virt_autotest::virtual_network_utils::restart_network();
 }
 
 sub post_fail_hook {
     my ($self) = @_;
 
+    $self->SUPER::post_fail_hook;
+
     #Restart libvirtd service
-    virt_autotest::virtual_network_utils::restart_libvirtd();
+    virt_autotest::utils::restart_libvirtd();
 
     #Destroy created virtual networks
     virt_autotest::virtual_network_utils::destroy_vir_network();
@@ -98,10 +120,6 @@ sub post_fail_hook {
 
     #Restore Guest systems
     virt_autotest::virtual_network_utils::restore_guests();
-
-    #Upload debug log
-    virt_autotest::virtual_network_utils::upload_debug_log();
-
 }
 
 1;

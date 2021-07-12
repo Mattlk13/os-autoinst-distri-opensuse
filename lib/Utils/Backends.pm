@@ -1,4 +1,4 @@
-# Copyright (C) 2018-2019 SUSE LLC
+# Copyright (C) 2018-2021 SUSE LLC
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -29,6 +29,7 @@ use warnings;
 use base 'Exporter';
 use Exporter;
 use testapi ':DEFAULT';
+use Utils::Architectures 'is_s390x';
 
 use constant {
     BACKEND => [
@@ -40,14 +41,21 @@ use constant {
           is_hyperv_in_gui
           is_svirt_except_s390x
           is_pvm
-          )
+          is_xen_pv
+          is_ipmi
+          is_qemu
+          is_svirt
+          is_image_backend
+          is_ssh_installation
+        )
     ],
     CONSOLES => [
         qw(
           set_sshserial_dev
           unset_sshserial_dev
           use_ssh_serial_console
-          )
+          set_ssh_console_timeout
+        )
     ]
 };
 
@@ -106,7 +114,7 @@ Returns true if the current instance is using ttys
 =cut
 
 sub has_ttys {
-    return ((get_var('BACKEND', '') !~ /ipmi|s390x|spvm|pvm_hmc/) && !get_var('S390_ZKVM') && !(check_var('BACKEND', 'generalhw') && !defined(get_var('GENERAL_HW_VNC_IP'))));
+    return ((get_var('BACKEND', '') !~ /ipmi|s390x|spvm|pvm_hmc/) && !get_var('S390_ZKVM') && !(check_var('BACKEND', 'generalhw') && !defined(get_var('GENERAL_HW_VNC_IP'))) && !get_var('PUBLIC_CLOUD'));
 }
 
 =head2 has_serial_over_ssh
@@ -141,6 +149,16 @@ sub is_hyperv_in_gui {
     return is_hyperv && !check_var('VIDEOMODE', 'text');
 }
 
+=head2 is_xen_pv
+
+Returns true if the current VM runs in Xen host in paravirtual mode
+
+=cut
+
+sub is_xen_pv {
+    return check_var('VIRSH_VMM_FAMILY', 'xen') && check_var('VIRSH_VMM_TYPE', 'linux');
+}
+
 =head2 is_svirt_except_s390x
 
 Returns true if the current instance is running as svirt backend except s390x
@@ -159,6 +177,69 @@ Returns true if the current instance is running as PowerVM backend 'spvm' or 'hm
 
 sub is_pvm {
     return check_var('BACKEND', 'spvm') || check_var('BACKEND', 'pvm_hmc');
+}
+
+=head2 is_ipmi
+
+Returns true if the current instance is running as ipmi backend
+
+=cut
+
+sub is_ipmi {
+    return check_var('BACKEND', 'ipmi');
+}
+
+=head2 is_qemu
+
+Returns true if the current instance is running as qemu backend
+
+=cut
+
+sub is_qemu {
+    return check_var('BACKEND', 'qemu');
+}
+
+=head2 is_svirt
+
+Returns true if the current instance is running as svirt backend
+
+=cut
+
+sub is_svirt {
+    return check_var('BACKEND', 'svirt');
+}
+
+=head2 is_image_backend
+
+Returns true if the current instance is running on backend with image support
+
+=cut
+
+sub is_image_backend {
+    return (is_qemu || is_svirt);
+}
+
+#This subroutine takes absolute file path of sshd config file and desired ssh connection timeout as arguments
+#The ssh connection timeout is counted as seconds
+sub set_ssh_console_timeout {
+    my ($sshd_config_file, $sshd_timeout) = @_;
+    my $client_count_max = $sshd_timeout / 60;
+    script_run("sed -irnE 's/^.*TCPKeepAlive.*\$/TCPKeepAlive yes/g; s/^.*ClientAliveInterval.*\$/ClientAliveInterval 60/g; s/^.*ClientAliveCountMax.*\$/ClientAliveCountMax $client_count_max/g' $sshd_config_file");
+    script_run("service sshd restart") if (script_run("systemctl restart sshd") ne '0');
+}
+
+=head2 is_ssh_installation
+
+Returns true if ssh is used for the installation. If ssh can be used with
+enabled X forwarding or in textmode.
+Textmode is only possible over ssh in case of powerVM, zVM, and zKVM.
+
+=cut
+
+sub is_ssh_installation {
+    my $videomode = get_var('VIDEOMODE', '');
+    return ($videomode =~ /ssh/ ||
+          (($videomode =~ /text/) && (is_pvm || is_s390x)));
 }
 
 1;

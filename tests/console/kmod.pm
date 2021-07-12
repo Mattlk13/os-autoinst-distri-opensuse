@@ -1,12 +1,13 @@
 # SUSE's openQA tests
 #
-# Copyright © 2019 SUSE LLC
+# Copyright © 2019-2020 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: kmod
 # Summary: Test common commands: modinfo, lsmod, modprobe, rmmod,
 # depmod. Tests the commands and their output for common words.
 # Module used for testing: ip_set.
@@ -24,7 +25,8 @@ use testapi;
 use utils 'zypper_call';
 
 sub run {
-    select_console 'root-console';
+    my $self = shift;
+    $self->select_serial_terminal;
 
     # Test modinfo command
     assert_script_run("OUT=\"\$(modinfo ip_set)\"");

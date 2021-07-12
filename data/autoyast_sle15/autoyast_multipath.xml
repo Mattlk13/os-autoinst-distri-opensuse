@@ -28,10 +28,8 @@ pre init scripts feature. See poo#20818.
   <general>
     <mode>
       <confirm config:type="boolean">false</confirm>
-      <final_reboot config:type="boolean">true</final_reboot>
     </mode>
     <storage>
-      <partition_alignment config:type="symbol">align_optimal</partition_alignment>
       <start_multipath config:type="boolean">false</start_multipath>
     </storage>
     <signature-handling>
@@ -81,8 +79,7 @@ pre init scripts feature. See poo#20818.
       <activate>true</activate>
       <append>mce=dont_log_ce edd=off consoleblank=0 rd.lvm.vg=system biosdevname=0 elevator=deadline</append>
       <boot_mbr>true</boot_mbr>
-      <secure-boot>off</secure-boot>
-      <suse_btrfs config:type="boolean">false</suse_btrfs>
+      <secure_boot>false</secure_boot>
       <os_prober>false</os_prober>
       <terminal>console</terminal>
       <timeout config:type="integer">-1</timeout>
@@ -125,11 +122,6 @@ pre init scripts feature. See poo#20818.
     <languages>en_US,de_DE</languages>
   </language>
 
-  <mail>
-    <listen_remote config:type="boolean">false</listen_remote>
-    <postfix_mda config:type="symbol">local</postfix_mda>
-  </mail>
-
   <networking>
     <ipv6 config:type="boolean">true</ipv6>
     <keep_install_network config:type="boolean">true</keep_install_network>
@@ -146,8 +138,6 @@ pre init scripts feature. See poo#20818.
       <nameservers config:type="list">
         <nameserver>10.0.2.3</nameserver>
       </nameservers>
-      <searchlist config:type="list">
-      </searchlist>
     </dns>
 
     <interfaces config:type="list">
@@ -606,18 +596,6 @@ fi
         </source>
       </script>
     </pre-scripts>
-    <chroot-scripts config:type="list">
-      <script>
-        <filename>cp-resolv.sh</filename>
-        <chrooted config:type="boolean">false</chrooted>
-        <interpreter>shell</interpreter>
-        <notification>Copying resolv.conf into chroot</notification>
-        <source><![CDATA[
-cp /etc/resolv.conf /mnt/etc
-]]>
-        </source>
-      </script>
-    </chroot-scripts>
   </scripts>
   <timezone>
     <hwclock>UTC</hwclock>

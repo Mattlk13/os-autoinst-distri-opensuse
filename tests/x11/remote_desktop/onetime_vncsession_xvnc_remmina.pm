@@ -1,12 +1,13 @@
 # SUSE's openQA tests
 #
-# Copyright © 2018-2019 SUSE LLC
+# Copyright © 2018-2020 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 #
+# Package: dhcp-client remmina
 # Summary: Remote Login: One-time VNC Session with remmina and xvnc
 # Maintainer: Grace Wang <grace.wang@suse.com>
 # Tags: tc#1610354
@@ -17,6 +18,7 @@ use base 'basetest';
 use testapi;
 use lockapi;
 use x11utils 'handle_login';
+use version_utils 'is_sle';
 
 sub run {
     #wait for supportserver if not yet ready
@@ -28,11 +30,16 @@ sub run {
     x11_start_program('xterm');
     become_root;
     assert_script_run 'dhclient';
-    type_string "exit\n";
+    enter_cmd "exit";
     send_key 'alt-f4';
 
     # Start Remmina and login the remote server
     x11_start_program('remmina', target_match => 'remmina-launched');
+    # The remmmina news turned off screen appears since the remmina got updated in 15SP3
+    if (is_sle('15-SP3+')) {
+        assert_screen("remmina-news-turned-off", 60);
+        assert_and_click("remmina-close-news-turned-off");
+    }
 
     # The default host key is right Ctrl which is not supported by openQA
     # Change the host key to 'z'

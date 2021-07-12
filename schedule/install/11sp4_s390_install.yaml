@@ -8,7 +8,14 @@ schedule:
   - installation/disk_activation
   - installation/partitioning_finish
   - installation/installer_timezone
+  - installation/install_11sp4_preparation
   - installation/start_install
   - installation/await_install
   - installation/install_11sp4_configuration
   - update/patch_sle
+  - '{{install_service_test}}'
+conditional_schedule:
+  install_service_test:
+    REGRESSIONTEST:
+      1:
+        - installation/install_service

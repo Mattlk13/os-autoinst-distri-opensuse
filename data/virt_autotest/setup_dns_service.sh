@@ -1,5 +1,7 @@
 #!/bin/bash
-
+#This script can be executed multiple times consecutively to facilitate establishing dns domain name access to virtual machines even virtual machine ip changes
+#The ability of consecutive multiple runs is achieved by detecting signature "$0" written to various configuration files by this script, so the backup original configuration 
+#files can be restored before executing this script again. In order to do so, please make sure the way in which this script is called is always the same every time
 #Usage and help info for the script
 help_usage(){
         echo "script usage: $(basename $0) [-f DNS forward domain name is mandatory(testvirt.net)] [-r DNS reverse domain name is mandatory(123.168.192)] [-s DNS server ip is mandatory (192.168.123.1)] [-h help]"
@@ -65,7 +67,7 @@ if [ $? -eq 0 ];then
         mv ${dhcpd_config_file}.orig ${dhcpd_config_file} #Restore ${dhcpd_config_file} if it was previously modified by this script
 fi
 cp $dhcpd_config_file $dhcpd_config_file.orig
-sed -irn "s/^.*default-lease-time.*$/default-lease-time 28800;/g; s/^.*max-lease-time.*$/max-lease-time 28800;/g; s/^.*option domain-name.*$/option domain-name \"$dns_domain_forward\";/g" ${qa_standalone_file}
+sed -irn "s/^.*default-lease-time.*$/default-lease-time 28800;/g; s/^.*max-lease-time.*$/max-lease-time 28800;/g; s/^.*option domain-name .*$/option domain-name \"$dns_domain_forward\";/g" ${qa_standalone_file}
 get_dhcp_ipaddr_range=`echo -e ${dns_domain_reverse} | awk -F"." 'BEGIN {OFS=".";} {print $3,$2,$1}'`
 dhcp_ipaddr_range=$(echo -e ${get_dhcp_ipaddr_range})
 sed -irn "s/^IP=.*$/IP=\'${bridgeip}\'/g; s/^NET=.*$/NET=\'${dhcp_ipaddr_range}\.0\'/g; s/^NETREV=.*$/NETREV=\'${dns_domain_reverse}\'/g; s/^NET_DHCP_RANGE_START=.*$/NET_DHCP_RANGE_START=\'${dhcp_ipaddr_range}\.10\'/g; s/^NET_DHCP_RANGE_END=.*$/NET_DHCP_RANGE_END=\'${dhcp_ipaddr_range}\.100\'/g; s/^NET_STATIC_RANGE_START=.*$/NET_STATIC_RANGE_START=\'${dhcp_ipaddr_range}\.101\'/g; s/^NET_STATIC_RANGE_END=.*$/NET_STATIC_RANGE_END=\'${dhcp_ipaddr_range}\.115\'/g" ${qa_standalone_file}
@@ -118,7 +120,7 @@ if [[ ${vmguest_failed} -ne 0 ]];then
 	exit 1
 fi
 #Wait for vm guests get assigned ip addresses
-sleep 60s
+sleep 90s
 echo -e "Virtual machines ${vm_guestnames_array[@]} have already been refreshed\n" | tee -a ${setup_log_file}
 
 #Write vm_hash_forward_ipaddr and vm_hash_reverse_ipaddr arrays
@@ -127,6 +129,11 @@ for vmguest in ${vm_guestnames_array[@]};do
         vm_macaddresses_array[${vm_hash_index}]=$(echo -e ${get_vm_macaddress})
         get_vm_ipaddress=`tac $dhcpd_lease_file | awk '!($0 in S) {print; S[$0]}' | tac | grep -iE "${vm_macaddresses_array[${vm_hash_index}]}" -B8 | grep -oE "([0-9]{1,3}\.){3}[0-9]{1,3}" | tail -1`
         vm_ipaddress=$(echo -e ${get_vm_ipaddress})
+        #missing ip will make named fail to load domain zones due to malformed zone file
+        if [ -z "$vm_ipaddress" ]; then
+            echo -e "Unable to get the ip of $vmguest. Abort the test!\n" | tee -a ${setup_log_file}
+            exit 1
+        fi
         vm_ipaddress_lastpart=$(echo -e ${vm_ipaddress} | grep -Eo "[0-9]{1,3}$")
         vm_hash_forward_ipaddr[${vm_hash_index}]=${vm_ipaddress}
         vm_hash_reverse_ipaddr[${vm_hash_index}]=${vm_ipaddress_lastpart}

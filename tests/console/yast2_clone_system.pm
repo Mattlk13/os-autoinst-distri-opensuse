@@ -8,6 +8,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: autoyast2
 # Summary: Clone system and use the autoyast file in chained tests
 # Maintainer: Martin Kravec <mkravec@suse.com>
 
@@ -18,8 +19,7 @@ use testapi;
 use version_utils qw(is_sle is_opensuse is_staging);
 use utils 'zypper_call';
 use repo_tools 'get_repo_var_name';
-
-my $xml_schema_path = "/usr/share/YaST2/schema/autoyast/rng/profile.rng";
+use y2_logs_helper qw(upload_autoyast_profile upload_autoyast_schema);
 
 sub run {
     my $self = shift;
@@ -43,16 +43,16 @@ sub run {
     upload_asset $ay_profile_path;
 
     unless (is_opensuse) {
-        # As developement_tools are not build for staging, we will attempt to get the package from the factory repo
+        # As developement_tools are not build for staging, we will attempt to get the package
         # otherwise MODULE_DEVELOPMENT_TOOLS should be used
-        my $uri = (is_staging) ? "http://download.opensuse.org/tumbleweed/repo/oss/" : get_ftp_uri();
+        my $uri = get_ftp_uri();
         zypper_call "ar -c $uri devel-repo";
     }
     zypper_call '--gpg-auto-import-keys ref';
 
     zypper_call 'install jing';
     zypper_call "rr devel-repo" if (is_staging);
-    my $rc_jing = script_run "jing $xml_schema_path $ay_profile_path";
+    my $rc_jing = script_run "jing /usr/share/YaST2/schema/autoyast/rng/profile.rng $ay_profile_path";
 
     if ($rc_jing) {
         if (is_sle('<15')) {
@@ -70,14 +70,21 @@ sub run {
 }
 
 sub get_ftp_uri {
-    my $devel_repo = get_required_var(is_sle('>=15') ? get_repo_var_name("MODULE_DEVELOPMENT_TOOLS") : 'REPO_SLE_SDK');
+    my $devel_repo;
+    if (is_staging) {
+        $devel_repo = uc(get_required_var('DISTRI')) . '-' . get_required_var('VERSION') .
+          '-Module-Development-Tools-POOL-' . get_required_var('ARCH') . '-CURRENT-Media1';
+    } else {
+        $devel_repo = get_required_var(is_sle('>=15') ? get_repo_var_name("MODULE_DEVELOPMENT_TOOLS") : 'REPO_SLE_SDK');
+    }
     return "$utils::OPENQA_FTP_URL/" . $devel_repo;
 }
 
 sub post_fail_hook {
     my $self = shift;
     $self->SUPER::post_fail_hook;
-    upload_logs($xml_schema_path);
+    $self->upload_autoyast_profile;
+    $self->upload_autoyast_schema;
 }
 
 1;

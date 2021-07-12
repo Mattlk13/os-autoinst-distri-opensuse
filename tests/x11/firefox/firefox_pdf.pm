@@ -8,6 +8,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: MozillaFirefox
 # Summary: Firefox PDF reader test (Case#1436081)
 # - Launch xterm, kill firefox, cleanup previous firefox configuration, launch
 # firefox
@@ -39,7 +40,6 @@ sub run {
     send_key "tab";
     for my $i (1 .. 4) { assert_and_click 'firefox-pdf-zoom_in_button'; }
     assert_screen('firefox-pdf-zoom_in');
-
     assert_and_click 'firefox-pdf-zoom_menu';
     sleep 1;
     assert_and_click 'firefox-pdf-zoom_menu_actual_size';    #"Actual Size"

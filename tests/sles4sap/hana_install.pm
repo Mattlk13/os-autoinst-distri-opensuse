@@ -1,12 +1,13 @@
 # SUSE's SLES4SAP openQA tests
 #
-# Copyright © 2019 SUSE LLC
+# Copyright © 2019-2021 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: lvm2 util-linux parted device-mapper
 # Summary: Install HANA via command line. Verify installation with
 # sles4sap/hana_test
 # Maintainer: Alvaro Carvajal <acarvajal@suse.com>
@@ -15,23 +16,56 @@ use base 'sles4sap';
 use strict;
 use warnings;
 use testapi;
-use utils 'zypper_call';
+use utils qw(file_content_replace zypper_call);
+use Utils::Systemd 'systemctl';
 use version_utils 'is_sle';
 use POSIX 'ceil';
 
-sub upload_install_log {
-    script_run "tar -zcvf /tmp/hana_install.log.tgz /var/tmp/hdb*";
-    upload_logs "/tmp/hana_install.log.tgz";
+sub is_multipath {
+    return (get_var('MULTIPATH') and (get_var('MULTIPATH_CONFIRM') !~ /\bNO\b/i));
+}
+
+sub get_hana_device_from_system {
+    my ($self, $disk_requirement) = @_;
+
+    # Create a list of devices already configured as PVs to exclude them from the search
+    my $out = script_output q@echo PV=$(pvscan -s 2>/dev/null | awk '/dev/ {print $1}' | tr '\n' ',')@;
+    $out =~ /PV=(.+),$/;
+    $out = $1;
+    my @pvdevs = map { if ($_ =~ s@mapper/@@) { $_ =~ s/\-part\d+$// } else { $_ =~ s/\d+$// } $_ =~ s@^/dev/@@; $_; } split(/,/, $out);
+
+    my $lsblk = q@lsblk -n -l -o NAME -d -e 7,11 | egrep -vw '@ . join('|', @pvdevs) . "'";
+    # lsblk command to probe for devices is different when in multipath scenario
+    $lsblk = q@lsblk -l -o NAME,TYPE -e 7,11 | awk '($2 == "mpath") {print $1}' | sort -u | egrep -vw '@ . join('|', @pvdevs) . "'" if is_multipath();
+
+    # Probe devices, check its size and filter out the ones that do not meet the disk requirements
+    my $devsize = 0;
+    my $devpath = is_multipath() ? '/dev/mapper/' : '/dev/';
+    my $device;
+    my $filter_devices;
+    while ($devsize < $disk_requirement) {
+        $out = script_output "echo DEV=\$($lsblk | egrep -vw '$filter_devices' | head -1)";
+        die "Could not find a suitable device for HANA installation." unless ($out =~ /DEV=([\w\.]+)$/);
+        $device = $1;
+        $filter_devices .= "|$device";
+        $filter_devices =~ s/^\|//;
+        $device = $devpath . $device;
+
+        # Need to verify there is enough space in the device for HANA
+        $out = script_output "echo SIZE=\$(lsblk -o SIZE --nodeps --noheadings --bytes $device)";
+        die "Could not get size for [$device] block device." unless ($out =~ /SIZE=(\d+)$/);
+        $devsize = $1;
+        $devsize /= (1024 * 1024);    # Work in Mbytes since $RAM = $self->get_total_mem() is in Mbytes
+    }
+
+    return $device;
 }
 
 sub run {
     my ($self) = @_;
     my ($proto, $path) = $self->fix_path(get_required_var('HANA'));
-
-    my $sid      = get_required_var('INSTANCE_SID');
-    my $instid   = get_required_var('INSTANCE_ID');
-    my $password = 'Qwerty_123';
-    set_var('PASSWORD', $password);
+    my $sid    = get_required_var('INSTANCE_SID');
+    my $instid = get_required_var('INSTANCE_ID');
 
     $self->select_serial_terminal;
     my $RAM = $self->get_total_mem();
@@ -55,6 +89,7 @@ sub run {
     # Mount points information: use the same paths and minimum sizes as the wizard (based on RAM size)
     my $full_size = ceil($RAM / 1024);                        # Use the ceil value of RAM in GB
     my $half_size = ceil($full_size / 2);
+    my $volgroup  = 'vg_hana';
     my %mountpts  = (
         hanadata   => {mountpt => '/hana/data',         size => "${full_size}g"},
         hanalog    => {mountpt => '/hana/log',          size => "${half_size}g"},
@@ -65,31 +100,93 @@ sub run {
     # Partition disks for Hana
     if (check_var('HANA_PARTITIONING_BY', 'yast')) {
         my $yast_partitioner = is_sle('15+') ? 'sap_create_storage_ng' : 'sap_create_storage';
-        assert_script_run "yast $yast_partitioner /usr/share/YaST2/include/sap-installation-wizard/hana_partitioning.xml", 120;
+        assert_script_run "yast $yast_partitioner /usr/share/YaST2/data/y2sap/hana_partitioning.xml", 120;
     }
     else {
         # If running on QEMU and with a second disk configured, then configure
-        # mountpoints and LVM. Otherwise leave those choices to hdblcm, but
-        # always create mountpoints.
+        # mountpoints and LVM. Otherwise leave those choices to hdblcm. If running
+        # in a different backend, assume sdb exists. Always create mountpoints.
         foreach (keys %mountpts) { assert_script_run "mkdir -p $mountpts{$_}->{mountpt}"; }
-        if (check_var('BACKEND', 'qemu') and get_var('HDDSIZEGB_2')) {
-            my $device = check_var('HDDMODEL', 'scsi-hd') ? '/dev/sdb' : '/dev/vdb';
-            script_run "wipefs -f $device; wipefs -f ${device}1";
-            assert_script_run "parted --script $device --wipesignatures -- mklabel gpt mkpart primary 1 -1";
-            $device .= '1';
+        if ((check_var('BACKEND', 'qemu') and get_var('HDDSIZEGB_2')) or !check_var('BACKEND', 'qemu')) {
+            # We need 2.5 times $RAM + 50G for HANA installation.
+            my $device = get_var('HANA_INST_DEV', '');
+            if ($device) {
+                die "Full path to block device expected in HANA_INST_DEV. Got [$device]" unless ($device =~ m|(/dev/\w+)(\d+)|);
+                my $disk    = $1;
+                my $partnum = $2;
+                if (script_run "test -b $device") {
+                    # Need to create the partition if it does not exist
+                    my $lastsector = script_output "parted --machine --script $disk -- unit MB print | tail -1 | cut -d: -f3";
+                    $lastsector =~ /(\d+)MB/;
+                    $lastsector = $1 + 1;
+                    assert_script_run "parted --script $disk -- mkpart primary $lastsector -1";
+                    assert_script_run "parted --script $disk -- set $partnum lvm on";
+                    assert_script_run "test -b $device";    # Check partition was created successfully
+                    script_run "wipefs -a -f $device";      # This is a new partition, but it could have traces of old tests. We do some cleanup
+                    script_run "partprobe $device";         # Reload kernel table
+                }
+            }
+            else {
+                $device = $self->get_hana_device_from_system(($RAM * 2.5) + 50000);
+                record_info "Device: $device", "Will use device [$device] for HANA installation";
+                script_run "wipefs -f $device; [[ -b ${device}1 ]] && wipefs -f ${device}1; [[ -b ${device}-part1 ]] && wipefs -f ${device}-part1";
+                assert_script_run "parted --script $device --wipesignatures -- mklabel gpt mkpart primary 1 -1";
+                $device .= is_multipath() ? '-part1' : '1';
+            }
+
+            # Remove traces of LVM structures from previous tests before configuring
+            foreach my $lv_cmd ('lv', 'vg', 'pv') {
+                my $looptime  = 20;
+                my $lv_device = ($lv_cmd eq 'pv') ? $device : $volgroup;
+                until (script_run "${lv_cmd}remove -f $lv_device 2>&1 | grep -q \"Can't open .* exclusively\.\"") {
+                    sleep bmwqemu::scale_timeout(2);
+                    # Try to fix device-mapper table as a workaround
+                    script_run("dmsetup remove $lv_device");
+                    last if (--$looptime <= 0);
+                }
+                if ($looptime <= 0) {
+                    record_info('ERROR', "Device $lv_device seems to be locked!", result => 'fail');
+                    # Just retry the $lv_cmd and a 'dmsetup ls' to have a "proper" error message
+                    script_run "${lv_cmd}remove -f $lv_device";
+                    script_run 'dmsetup ls';
+                    die 'locked block device';    # We have to force the die, record_info don't do it
+                }
+            }
+            foreach (keys %mountpts) { script_run "dmsetup remove $volgroup-lv_$_"; }
+
+            # Now configure LVs and file systems for HANA
             assert_script_run "pvcreate -y $device";
-            assert_script_run "vgcreate -f vg_hana $device";
+            assert_script_run "vgcreate -f $volgroup $device";
             foreach my $mounts (keys %mountpts) {
-                assert_script_run "lvcreate -y -W y -n lv_$mounts --size $mountpts{$mounts}->{size} vg_hana";
-                assert_script_run "mkfs.xfs /dev/vg_hana/lv_$mounts";
-                assert_script_run "mount /dev/vg_hana/lv_$mounts $mountpts{$mounts}->{mountpt}";
-                assert_script_run "echo /dev/vg_hana/lv_$mounts $mountpts{$mounts}->{mountpt} xfs defaults 0 0 >> /etc/fstab";
+                assert_script_run "lvcreate -y -W y -n lv_$mounts --size $mountpts{$mounts}->{size} $volgroup";
+                assert_script_run "mkfs.xfs -f /dev/$volgroup/lv_$mounts";
+                assert_script_run "mount /dev/$volgroup/lv_$mounts $mountpts{$mounts}->{mountpt}";
+                assert_script_run "echo /dev/$volgroup/lv_$mounts $mountpts{$mounts}->{mountpt} xfs defaults 0 0 >> /etc/fstab";
             }
         }
     }
+    # Configure NVDIMM devices only when running on a BACKEND with NVDIMM
+    my $pmempath = get_var('HANA_PMEM_BASEPATH', "/hana/pmem/$sid");
+    if (get_var('NVDIMM')) {
+        my $nvddevs = get_var('NVDIMM_NAMESPACES_TOTAL', 2);
+        foreach my $i (0 .. ($nvddevs - 1)) {
+            assert_script_run "mkdir -p $pmempath/pmem$i";
+            assert_script_run "mkfs.xfs -f /dev/pmem$i";
+            assert_script_run "echo /dev/pmem$i $pmempath/pmem$i xfs defaults,noauto,dax 0 0 >> /etc/fstab";
+            assert_script_run "mount $pmempath/pmem$i";
+        }
+
+        assert_script_run 'mkdir -p /etc/systemd/system/systemd-udev-settle.service.d';
+        assert_script_run "curl -f -v " . autoinst_url .
+          '/data/sles4sap/udev-settle-override.conf -o /etc/systemd/system/systemd-udev-settle.service.d/00-override.conf';
+        systemctl 'daemon-reload';
+        systemctl 'restart systemd-udev-settle';
+
+        assert_script_run "chmod 0777 $pmempath -R";
+    }
     assert_script_run "df -h";
 
-    # Check we have an hdblcm
+    # hdblcm is used for installation, verify if it exists
     my $hdblcm = '/sapinst/' . get_var('HANA_HDBLCM', "DATA_UNITS/HDB_SERVER_LINUX_" . uc(get_required_var('ARCH')) . "/hdblcm");
     die "hdblcm is not in [$hdblcm]. Set HANA_HDBLCM to the appropiate relative path. Example: DATA_UNITS/HDB_SERVER_LINUX_X86_64/hdblcm"
       if (script_run "ls $hdblcm");
@@ -98,30 +195,44 @@ sub run {
     my @hdblcm_args = qw(--autostart=n --shell=/bin/sh --workergroup=default --system_usage=custom --batch
       --hostname=$(hostname) --db_mode=multiple_containers --db_isolation=low --restrict_max_mem=n
       --userid=1001 --groupid=79 --use_master_password=n --skip_hostagent_calls=n --system_usage=production);
-    push @hdblcm_args, "--sid=$sid", "--number=$instid", "--home=$mountpts{usr_sap}->{mountpt}",
-      "--password=$password", "--system_user_password=$password", "--sapadm_password=$password",
-      "--datapath=$mountpts{hanadata}->{mountpt}/$sid", "--logpath=$mountpts{hanalog}->{mountpt}/$sid",
+    push @hdblcm_args,
+      "--sid=$sid",
+      "--number=$instid",
+      "--home=$mountpts{usr_sap}->{mountpt}",
+      "--password=$sles4sap::instance_password",
+      "--system_user_password=$sles4sap::instance_password",
+      "--sapadm_password=$sles4sap::instance_password",
+      "--datapath=$mountpts{hanadata}->{mountpt}/$sid",
+      "--logpath=$mountpts{hanalog}->{mountpt}/$sid",
       "--sapmnt=$mountpts{hanashared}->{mountpt}";
+    push @hdblcm_args, "--pmempath=$pmempath", "--use_pmem" if get_var('NVDIMM');
     my $cmd = join(' ', $hdblcm, @hdblcm_args);
+    record_info 'hdblcm command', $cmd;
     assert_script_run $cmd, $tout;
 
-    upload_install_log;
+    # Enable autostart of HANA HDB, otherwise DB will be down after the next reboot
+    # NOTE: not on HanaSR, as DB is managed by the cluster stack; nor on bare metal,
+    # as instance starts automatically faster and sles4sap::test_start() may fail
+    unless (get_var('HA_CLUSTER') or check_var('BACKEND', 'ipmi')) {
+        my $hostname = script_output 'hostname';
+        file_content_replace("$mountpts{hanashared}->{mountpt}/${sid}/profile/${sid}_HDB${instid}_${hostname}", '^Autostart[[:blank:]]*=.*' => 'Autostart = 1');
+    }
 
+    if (get_var('NVDIMM')) {
+        assert_script_run 'chown ' . lc($sid) . "adm:sapsys $pmempath $pmempath/pmem*";
+        assert_script_run "chmod 0755 $pmempath $pmempath/pmem*";
+    }
+
+    # Upload installations logs
+    $self->upload_hana_install_log;
+
+    # Quick check of block/filesystem devices after installation
     assert_script_run 'mount';
     assert_script_run 'lvs -ao +devices';
 }
 
 sub test_flags {
     return {fatal => 1};
-}
-
-sub post_fail_hook {
-    my ($self) = @_;
-    $self->select_serial_terminal;
-    upload_install_log;
-    assert_script_run "save_y2logs /tmp/y2logs.tar.xz";
-    upload_logs "/tmp/y2logs.tar.xz";
-    $self->SUPER::post_fail_hook;
 }
 
 1;

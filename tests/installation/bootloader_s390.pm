@@ -1,7 +1,7 @@
 # SUSE's openQA tests
 #
 # Copyright © 2009-2013 Bernhard M. Wiedemann
-# Copyright © 2012-2019 SUSE LLC
+# Copyright © 2012-2020 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -82,10 +82,6 @@ sub prepare_parmfile {
     my $params = '';
     $params .= " " . get_var('S390_NETWORK_PARAMS');
     $params .= " " . get_var('EXTRABOOTPARAMS');
-    if ((is_sle('>=15-SP2') || is_tumbleweed()) && get_var('WORKAROUND_BUGS') =~ 'bsc1156047') {
-        $params .= ' hardened_usercopy=off';
-        record_soft_failure('bsc#1156053 - hardened_usercopy=off to avoid "/dev/hvc0: cannot get controlling tty: Operation not permitted" (Kernel memory overwrite attempt detected to SLUB object - illegal operation)');
-    }
 
     $params .= remote_install_bootmenu_params;
 
@@ -112,9 +108,11 @@ sub prepare_parmfile {
     if (get_var('AUTOYAST')) {
         if (get_var('AUTOYAST_PREPARE_PROFILE')) {
             $params .= " autoyast=" . shorten_url(get_var('AUTOYAST'));
+            set_var('AUTOYAST', shorten_url(get_var('AUTOYAST')));
         }
         else {
             $params .= " autoyast=" . shorten_url(data_url(get_var('AUTOYAST')));
+            set_var('AUTOYAST', shorten_url(data_url(get_var('AUTOYAST'))));
         }
     }
     return split_lines($params);
@@ -255,6 +253,7 @@ sub format_dasd {
     show_debug();
     die "dasd_configure died with exit code $r" unless (defined($r) && $r == 0);
 
+    script_run('lsmod | tee /dev/hvc0');
     # format dasda (this can take up to 20 minutes depending on disk size)
     $r = script_run("echo yes | dasdfmt -b 4096 -p /dev/dasda", 1800);
     show_debug();
@@ -266,11 +265,11 @@ sub format_dasd {
     }
 
     # bring DASD down again to test the activation during the installation
-    if (script_run('timeout --preserve-status 20 bash -x /sbin/dasd_configure 0.0.0150 0') != 0) {
+    if (script_run("timeout --preserve-status 20 bash -x /sbin/dasd_configure $dasd_path 0") != 0) {
         record_soft_failure('bsc#1151436');
         script_run('dasd_reload');
         assert_script_run('dmesg');
-        assert_script_run("bash -x /sbin/dasd_configure -f 0.0.0150 0");
+        assert_script_run("bash -x /sbin/dasd_configure -f $dasd_path 0");
     }
 }
 
@@ -318,9 +317,12 @@ sub run {
 
     # We have textmode installation via ssh and the default vnc installation so far
     if (check_var('VIDEOMODE', 'text') || check_var('VIDEOMODE', 'ssh-x')) {
-        # Workaround for bsc#1142040
-        # type_string("yast.ssh\n");
-        type_string("QT_XCB_GL_INTEGRATION=none yast.ssh\n") && record_soft_failure('bsc#1142040');
+        # If libyui REST API is used, we set it up in installation/setup_libyui
+        unless (get_var('YUI_REST_API')) {
+            # Workaround for bsc#1142040
+            # enter_cmd("yast.ssh");
+            enter_cmd("QT_XCB_GL_INTEGRATION=none yast.ssh") && record_soft_failure('bsc#1142040');
+        }
     }
     wait_still_screen;
 

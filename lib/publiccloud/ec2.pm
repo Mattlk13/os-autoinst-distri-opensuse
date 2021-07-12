@@ -15,6 +15,7 @@ package publiccloud::ec2;
 use Mojo::Base 'publiccloud::provider';
 use Mojo::JSON 'decode_json';
 use testapi;
+use publiccloud::utils "is_byos";
 
 use constant CREDENTIALS_FILE => '/root/amazon_credentials';
 
@@ -114,13 +115,57 @@ sub upload_img {
 
     die("Create key-pair failed") unless ($self->create_keypair($self->prefix . time, 'QA_SSH_KEY.pem'));
 
-    my ($img_name) = $file =~ /([^\/]+)$/;
-    my $img_arch   = get_var('PUBLIC_CLOUD_ARCH', 'x86_64');
-    my $sec_group  = get_var('PUBLIC_CLOUD_EC2_UPLOAD_SECGROUP');
-    my $vpc_subnet = get_var('PUBLIC_CLOUD_EC2_UPLOAD_VPCSUBNET');
-    # Used for helper VM to create/build the image on CSP. When uploading a on-demand image, this ID should point
-    # to and on-demand image. If not specified, the id gets read from ec2utils.conf file.
-    my $ami_id = get_var('PUBLIC_CLOUD_EC2_UPLOAD_AMI');
+    # AMI of image to use for helper VM to create/build the image on CSP.
+    my $helper_ami_id = get_var('PUBLIC_CLOUD_EC2_UPLOAD_AMI');
+
+    # in case AMI for helper VM is not provided in job settings fallback to predefined hash
+    unless (defined($helper_ami_id)) {
+
+        # AMI is region specific also we need to use different AMI's for on-demand/BYOS uploads
+        my $ami_id_hash = {
+            # suse-sles-15-sp2-byos-v20210310-hvm-ssd-x86_64
+            'us-west-1-byos' => 'ami-00dce4ab26f53989c',
+            # suse-sles-15-sp2-v20210310-hvm-ssd-x86_64
+            'us-west-1' => 'ami-099dc1001c74f4813',
+            # suse-sles-15-sp2-byos-v20210310-hvm-ssd-x86_64
+            'us-west-2-byos' => 'ami-088f33f7fdcd2e657',
+            # suse-sles-15-sp2-v20210310-hvm-ssd-x86_64
+            'us-west-2' => 'ami-072cfc789636fd055',
+            # suse-sles-15-sp2-byos-v20210310-hvm-ssd-x86_64
+            'eu-central-1-byos' => 'ami-0e0c1a6d906f89e31',
+            # suse-sles-15-sp2-v20210310-hvm-ssd-x86_64
+            'eu-central-1' => 'ami-0174e85f7925868aa',
+            # suse-sles-15-sp2-v20210303-hvm-ssd-arm64
+            'eu-central-1-arm64' => 'ami-0b01dd8e9169233b8',
+            # suse-sles-15-sp2-byos-v20210303-hvm-ssd-arm64
+            'eu-central-1-byos-arm64' => 'ami-0c8748d383cef954d',
+            # suse-sles-15-sp2-v20210612-hvm-ssd-x86_64
+            'eu-west-1' => 'ami-0262d8a22ca5eae95',
+            # suse-sles-15-sp2-byos-v20210612-hvm-ssd-x86_64
+            'eu-west-1-byos' => 'ami-076b2a39e235b7d33',
+            # suse-sles-15-sp2-v20210604-hvm-ssd-arm64
+            'eu-west-1-arm64' => 'ami-0f3c8cfb9639c3b6d',
+            # suse-sles-15-sp2-byos-v20210604-hvm-ssd-arm64
+            'eu-west-1-byos-arm64' => 'ami-02eae5be24d203db3',
+        };
+
+        my $ami_id_key = $self->region;
+        $ami_id_key .= '-byos'  if is_byos();
+        $ami_id_key .= '-arm64' if check_var('PUBLIC_CLOUD_ARCH', 'arm64');
+        $helper_ami_id = $ami_id_hash->{$ami_id_key} if exists($ami_id_hash->{$ami_id_key});
+    }
+
+    die('Unable to detect AMI for helper VM') unless (defined($helper_ami_id));
+
+    my ($img_name)    = $file =~ /([^\/]+)$/;
+    my $img_arch      = get_var('PUBLIC_CLOUD_ARCH', 'x86_64');
+    my $sec_group     = get_var('PUBLIC_CLOUD_EC2_UPLOAD_SECGROUP');
+    my $vpc_subnet    = get_var('PUBLIC_CLOUD_EC2_UPLOAD_VPCSUBNET');
+    my $instance_type = get_var('PUBLIC_CLOUD_EC2_UPLOAD_INSTANCE_TYPE', 't2.micro');
+
+    # ec2uploadimg will fail without this file, but we can have it empty
+    # because we passing all needed info via params anyway
+    assert_script_run('echo " " > /root/.ec2utils.conf');
 
     assert_script_run("ec2uploadimg --access-id '" . $self->key_id
           . "' -s '" . $self->key_secret . "' "
@@ -129,16 +174,19 @@ sub upload_img {
           . "--machine '" . $img_arch . "' "
           . "-n '" . $self->prefix . '-' . $img_name . "' "
           . "--virt-type hvm --sriov-support "
-          . ($img_name =~ /byos/i || $img_arch eq 'arm64' ? '' : '--use-root-swap ')
+          . (is_byos() ? '' : '--use-root-swap ')
           . '--ena-support '
           . "--verbose "
           . "--regions '" . $self->region . "' "
           . "--ssh-key-pair '" . $self->ssh_key . "' "
           . "--private-key-file " . $self->ssh_key_file . " "
-          . "-d 'OpenQA tests' "
+          . "-d 'OpenQA upload image' "
+          . "--wait-count 3 "
+          . "--ec2-ami '" . $helper_ami_id . "' "
+          . "--type '" . $instance_type . "' "
+          . "--user '" . $self->username . "' "
           . ($sec_group  ? "--security-group-ids '" . $sec_group . "' " : '')
           . ($vpc_subnet ? "--vpc-subnet-id '" . $vpc_subnet . "' "     : '')
-          . ($ami_id     ? "--ec2-ami '" . $ami_id . "' "               : '')
           . "'$file'",
         timeout => 60 * 60
     );

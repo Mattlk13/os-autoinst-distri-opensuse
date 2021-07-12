@@ -1,12 +1,13 @@
 # SUSE's openQA tests
 #
-# Copyright © 2016-2019 SUSE LLC
+# Copyright © 2016-2020 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: xorg-x11-Xvnc ncurses-utils tigervnc xev
 # Summary: Check VNC Secondary viewonly password
 # - Stop vncmanager
 # - Create custom passwords (one for readonly, other for # read/write)
@@ -19,6 +20,7 @@
 # - Check if events were recorded by xev
 # - Close all opened windows
 # Maintainer: mkravec <mkravec@suse.com>
+#             Felix Niederwanger <felix.niederwanger@suse.de>
 # Tags: poo#11794
 
 use base "x11test";
@@ -26,17 +28,21 @@ use strict;
 use warnings;
 use testapi;
 use x11utils 'ensure_unlocked_desktop';
+use version_utils 'is_sle';
+use utils;
 
 # Any free display
 my $display = ':37';
 
 # Passwords for VNC access
 my @options = ({pw => "readonly_pw", change => 0}, {pw => "readwrite_pw", change => 1});
+# A wrong password to check if the access is denied
+my $wrong_password = "password123";
 
 sub type_and_wait {
     type_string shift;
     wait_screen_change {
-        type_string "\n";
+        send_key 'ret';
     };
 }
 
@@ -46,7 +52,7 @@ sub start_vnc_server {
     script_run 'systemctl stop vncmanager';
 
     # Create password file
-    type_string "tput civis\n";
+    enter_cmd "tput civis";
     type_and_wait "vncpasswd /tmp/file.passwd";
 
     # Set read write password
@@ -57,10 +63,19 @@ sub start_vnc_server {
     # Set read only password
     type_and_wait $options[0]->{pw};
     type_and_wait $options[0]->{pw};
-    type_string "tput cnorm\n";
+    enter_cmd "tput cnorm";
+
+    # Also set the password via `vncpasswd -f` for vncserver and to test for https://bugzilla.opensuse.org/show_bug.cgi?id=1171519
+    assert_script_run('umask 0077');
+    script_run('mkdir $HOME/.vnc');
+    assert_script_run('chmod go-rwx "$HOME/.vnc"');
+    if (script_run("echo \"$options[1]->{pw}\" | vncpasswd -f > \$HOME/.vnc/passwd; echo \"$options[0]->{pw}\" | vncpasswd -f >> \$HOME/.vnc/passwd") != 0) {
+        record_soft_failure('vncpasswd crashes - bsc#1171519');
+        assert_script_run('cp /tmp/file.passwd $HOME/.vnc/passwd');
+    }
 
     # Start server
-    type_string "Xvnc $display -SecurityTypes=VncAuth -PasswordFile=/tmp/file.passwd\n";
+    enter_cmd "Xvnc $display -SecurityTypes=VncAuth -PasswordFile=/tmp/file.passwd";
     wait_still_screen 2;
     select_console 'x11';
 }
@@ -69,23 +84,30 @@ sub generate_vnc_events {
     my $password = shift;
 
     # Login into vnc display in RO/RW mode
-    x11_start_program("vncviewer $display -SecurityTypes=VncAuth", target_match => 'vnc_password_dialog', match_timeout => 60);
-    type_string "$password\n";
+    x11_start_program 'xterm';
+    send_key 'super-left';
+    enter_cmd "vncviewer $display -SecurityTypes=VncAuth ; echo vncviewer-finished >/dev/$serialdev ", timeout => 60;
+    assert_screen 'vnc_password_dialog';
+    enter_cmd "$password";
     assert_screen 'vncviewer-xev';
-    send_key "super-left";
+    send_key 'super-left';
     wait_still_screen 2;
 
     # Send some vnc events to xev
-    type_string "events";
+    type_string 'events';
     mouse_set(80, 120);
     mouse_set(85, 125);
     mouse_click;
 
     send_key 'alt-f4';
+    wait_serial('vncviewer-finished') || die 'vncviewer not finished';
+    enter_cmd 'exit';
 }
 
 sub run {
     record_info 'Setup VNC';
+    select_console('root-console');
+    zypper_call('in tigervnc xorg-x11-Xvnc xev');
     start_vnc_server;
 
     # open xterm for xev
@@ -97,13 +119,19 @@ sub run {
         record_info 'Try ' . ($opt->{change} ? 'RW' : 'RO') . ' mode';
 
         # Start event watcher
-        type_string "xev -display $display -root | tee /tmp/xev_log\n";
+        # trap is needed because ctrl-c would kill the whole process group (cmd ; cmd)
+        # eg.
+        #     xev -display $display -root | tee /tmp/xev_log ; echo xev-finished >/dev/$serialdev
+        # will not work
+        # Parentheses are needed to not populate trap to following commands
+        enter_cmd "(trap 'echo xev-finished >/dev/$serialdev' SIGINT; xev -display $display -root | tee /tmp/xev_log) ";
 
         # Repeat with RO/RW password
         generate_vnc_events $opt->{pw};
 
         # Close xev
         send_key 'ctrl-c';
+        wait_serial('xev-finished') || die 'xev not finished';
 
         # Check if xev recorded events or not - RO/RW mode
         if ($opt->{change}) {
@@ -115,11 +143,55 @@ sub run {
         assert_script_run 'rm /tmp/xev_log';
     }
 
-    # Cleanup
+    # Stop Xvnc
     send_key "alt-f4";
     select_console 'root-console', await_console => 0;
     send_key "ctrl-c";
-    select_console "x11";
+    wait_still_screen 2;
+
+    # Start vncserver and check if it is running
+    assert_script_run("vncserver $display -geometry 1024x768 -depth 16", fail_message => "vncserver is not starting");
+    script_run("vncserver -list > /var/tmp/vncserver-list");
+    assert_script_run("grep '$display' /var/tmp/vncserver-list", fail_message => "vncserver is not running");
+    # The needles for the tigervnc test are gnome specific
+    if (check_var('DESKTOP', 'gnome')) {
+        # Switch to desktop and run vncviewer
+        select_console('x11');
+        ensure_unlocked_desktop;
+        x11_start_program('vncviewer');
+        type_string("$display");
+        send_key("ret");
+        # We first test for a unsucessfull login
+        assert_screen('tigervnc-desktop-login');
+        type_string("$wrong_password");
+        send_key("ret");
+        assert_screen('tigervnc-login-fail');
+        send_key("ret");
+        # Test for a sucessfull login. Note: vncviewer remembers the last address, don't type it again
+        x11_start_program('vncviewer');
+        send_key("ret");
+        assert_screen('tigervnc-desktop-login');
+        type_string("$options[1]->{pw}");
+        send_key("ret");
+        assert_screen('tigervnc-desktop-loggedin');
+        save_screenshot();
+        send_key("alt-f4");
+        x11_start_program('vncviewer');
+        send_key("ret");
+        assert_screen('tigervnc-desktop-login');
+        type_string("$options[0]->{pw}");
+        send_key("ret");
+        assert_screen('tigervnc-desktop-loggedin');
+        save_screenshot();
+        send_key("alt-f4");
+    } else {
+        record_info("skipping graphical vnc tests (non-gnome desktop)");
+    }
+    # Terminate server
+    select_console('root-console');
+    assert_script_run("vncserver -kill $display");
+    # Done
+    select_console('x11');
 }
 
 sub post_fail_hook {

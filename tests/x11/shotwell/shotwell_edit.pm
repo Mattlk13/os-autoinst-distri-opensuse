@@ -7,6 +7,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: shotwell
 # Summary: Shotwell: Delete or edit an imported image
 # Maintainer: Zhaocong Jia <zcjia@suse.com> Grace Wang <grace.wang@suse.com>
 # Tags: tc#1503811
@@ -31,9 +32,9 @@ sub run {
     send_key "alt-home";
     send_key "ret";
     assert_screen 'shotwell-display-picture';
-    send_key "ctrl-r";    # Rotate the picture
+    send_key "ctrl-r";          # Rotate the picture
     assert_screen 'shotwell-rotate-picture';
-    send_key "ctrl-o";    # Crop the picture
+    send_key "ctrl-o";          # Crop the picture
     assert_screen 'shotwell-crop-toolbar';
     send_key "ret";
     assert_screen 'shotwell-crop-picture';

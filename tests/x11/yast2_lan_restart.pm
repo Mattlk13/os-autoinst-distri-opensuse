@@ -7,6 +7,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: yast2
 # Summary: YaST logic on Network Restart while no config changes were made
 # - Launch xterm as root, stop firewalld
 # - Put network in debug mode (DEBUG="yes" on /etc/sysconfig/network/config)
@@ -26,6 +27,8 @@ use testapi;
 use y2lan_restart_common;
 use y2_module_basetest 'is_network_manager_default';
 use version_utils ':VERSION';
+
+my $backend = get_required_var('BACKEND');
 
 sub check_network_settings_tabs {
     send_key 'alt-g';    # Global options tab
@@ -49,14 +52,14 @@ sub check_network_card_setup_tabs {
 }
 
 sub check_default_gateway {
-    send_key 'alt-u';    # Routing tab
+    send_key 'alt-u';        # Routing tab
     assert_screen 'yast2_lan_routing_tab';
-    send_key 'alt-f';    # select Default IPv4 Gateway
+    send_key 'alt-f';        # select Default IPv4 Gateway
     type_string '10.0.2.2';
     save_screenshot;
-    send_key 'alt-g';    # Global options tab
+    send_key 'alt-g';        # Global options tab
     assert_screen 'yast2_lan_global_options_tab';
-    send_key 'alt-u';    # Routing tab
+    send_key 'alt-u';        # Routing tab
     assert_screen 'yast2_lan_routing_tab';
     send_key 'alt-f';
     send_key 'backspace';    # Delete selected IP
@@ -73,7 +76,7 @@ sub change_hw_device_name {
         send_key 'alt-w';    # Hardware tab
         assert_screen 'yast2_lan_hardware_tab';
     }
-    send_key 'alt-e';        # Change device name
+    send_key 'alt-e';                           # Change device name
     assert_screen 'yast2_lan_device_name';
     send_key 'tab' for (1 .. 2);
     type_string $dev_name;
@@ -86,15 +89,25 @@ sub change_hw_device_name {
 sub run {
     initialize_y2lan;
     verify_network_configuration;               # check simple access to Overview tab
-    verify_network_configuration(\&check_network_settings_tabs);
+    my $service_status_after_conf = (is_sle('<=15')) ? 'no_restart_or_reload' : 'reload';
+    if ($backend eq "svirt") {
+        verify_network_configuration(\&check_network_settings_tabs, $service_status_after_conf);
+    }
+    else {
+        verify_network_configuration(\&check_network_settings_tabs);
+    }
     unless (is_network_manager_default) {
         # Run detailed check only if explicitly configured in the test suite
         check_etc_hosts_update() if get_var('VALIDATE_ETC_HOSTS');
-        verify_network_configuration(\&check_network_card_setup_tabs);
+        record_info "check_network_card_setup_tabs";
+        verify_network_configuration(\&check_network_card_setup_tabs, $service_status_after_conf);
+        record_info "check_default_gateway";
         verify_network_configuration(\&check_default_gateway);
-        verify_network_configuration(\&change_hw_device_name, 'dyn0', 'restart');
+        record_info "change_hw_device_name";
+        $service_status_after_conf = (is_sle('<=15-SP1')) ? 'restart' : 'reload';
+        verify_network_configuration(\&change_hw_device_name, $service_status_after_conf, 'dyn0');
     }
-    type_string "killall xterm\n";
+    enter_cmd "killall xterm";
 }
 
 sub test_flags {

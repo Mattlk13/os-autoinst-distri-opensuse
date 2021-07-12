@@ -1,0 +1,29 @@
+---
+name: yast_hostname
+description: >
+  Test suite uses default option to set hostname. Test validates if installation
+  can successfully start in case of usage of these parameters.
+vars:
+  EXIT_AFTER_START_INSTALL: '1'
+  YUI_REST_API: 1
+schedule:
+  - installation/isosize
+  - installation/bootloader_start
+  - installation/setup_libyui
+  - installation/product_selection/select_product
+  - installation/licensing/accept_license
+  - installation/scc_registration
+  - installation/addon_products_sle
+  - installation/system_role
+  - installation/partitioning
+  - installation/partitioning_finish
+  - installation/installer_timezone
+  - installation/hostname_inst
+  - installation/authentication/use_same_password_for_root
+  - installation/authentication/default_user_simple_pwd
+  - installation/resolve_dependency_issues
+  - installation/installation_overview
+  - installation/disable_grub_timeout
+  - installation/start_install
+test_data:
+  product: SLES

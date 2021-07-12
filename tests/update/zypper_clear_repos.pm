@@ -8,6 +8,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: zypper
 # Summary: Clear unneed repos before updating for Staging Project
 # Maintainer: Max Lin <mlin@suse.com>
 
@@ -20,13 +21,13 @@ use utils;
 sub run {
     select_console 'root-console';
     # packagekit service may block zypper when operate on repos
-    pkcon_quit;
+    quit_packagekit;
 
     # remove Factory repos
     my $repos_folder = '/etc/zypp/repos.d';
     zypper_call 'lr -d', exitcode => [0, 6];
     assert_script_run(
-"find $repos_folder/*.repo -type f -exec grep -q 'baseurl=http://download.opensuse.org/' {} \\; -delete && echo 'unneed_repos_removed' > /dev/$serialdev",
+"find $repos_folder/*.repo -type f -exec grep -Eq 'baseurl=(http|https)://download.opensuse.org/' {} \\; -delete && echo 'unneed_repos_removed' > /dev/$serialdev",
         15
     );
     zypper_call 'lr -d', exitcode => [0, 6];

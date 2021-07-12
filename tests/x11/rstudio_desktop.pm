@@ -7,6 +7,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 #
+# Package: rstudio-desktop
 # Summary: Basic test of RStudio Desktop
 # Maintainer: Dan Čermák <dcermak@suse.com>
 
@@ -28,6 +29,10 @@ sub run {
     rstudio_sin_x_plot(rstudio_mode => "desktop");
 
     rstudio_create_and_test_new_project(rstudio_mode => "desktop");
+
+    rstudio_run_profiler(rstudio_mode => "desktop");
+
+    rstudio_test_notebook(rstudio_mode => "desktop");
 
     # bye-bye
     send_key('alt-f4');

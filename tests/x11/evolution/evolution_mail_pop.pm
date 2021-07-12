@@ -7,6 +7,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: evolution
 # Summary: Test Case #1503919 - Evolution: send and receive email via POP
 # - Setup pop account on evolution with credentials from internal_account_A
 # - Send an email to internal_account_A with subject as current date and random
@@ -23,8 +24,16 @@ use testapi;
 use utils;
 
 sub run {
-    my $self    = shift;
-    my $account = "internal_account_A";
+    my $self = shift;
+    # Select correct account to use with multimachine.
+    my $account  = "internal_account";
+    my $hostname = get_var('HOSTNAME');
+    if ($hostname eq 'client') {
+        $account = "internal_account_C";
+    }
+    else {
+        $account = "internal_account_A";
+    }
     $self->setup_pop($account);
 
     my $mail_subject = $self->evolution_send_message($account);

@@ -31,29 +31,37 @@ sub run {
     save_screenshot;
     send_key 'alt-n';      # next
     assert_screen 'windows-activate';
-    assert_and_click 'windows-no-prod-key';
-    assert_screen 'windows-select-system';
-    send_key_until_needlematch('windows-10-pro', 'down');
-    send_key 'alt-n';      # select OS (Win 10 Pro)
-    assert_screen 'windows-license';
-    send_key 'alt-a';      # accept eula
-    send_key 'alt-n';      # next
+    if (my $key = get_var('_SECRET_WINDOWS_10_PRO_KEY')) {
+        type_password $key . "\n";
+        assert_screen([qw(windows-wrong-key windows-license-with-key)]);
+        die("The provided product key didn't work...") if (match_has_tag('windows-wrong-key'));
+    }
+    else {
+        assert_and_click 'windows-no-prod-key';
+        assert_screen 'windows-select-system';
+        send_key_until_needlematch('windows-10-pro', 'down');
+        send_key 'alt-n';    # select OS (Win 10 Pro)
+        assert_screen 'windows-license';
+    }
+    send_key 'alt-a';                                                           # accept eula
+    send_key 'alt-n';                                                           # next
     assert_screen 'windows-installation-type';
-    send_key 'alt-c';      # custom
+    send_key 'alt-c';                                                           # custom
     assert_screen 'windows-disk-partitioning';
-    send_key 'alt-l';      # load driver
+    send_key 'alt-l';                                                           # load driver
     assert_screen 'windows-load-driver';
-    send_key 'alt-b';      # browse button
+    send_key 'alt-b';                                                           # browse button
     send_key 'c';
     save_screenshot;
-    send_key 'c';          # go to second CD drive with drivers
-    send_key 'right';      # ok
+    send_key 'c';                                                               # go to second CD drive with drivers
+    send_key 'right';                                                           # ok
     sleep 0.5;
     send_key 'ret';
     wait_still_screen stilltime => 3, timeout => 10;
     send_key_until_needlematch 'windows-all-drivers-selected', 'shift-down';    # select all drivers
     send_key 'alt-n';
-    assert_and_click 'windows-partitions';
+    assert_screen 'windows-partitions';
+    assert_and_click 'windows-next-install';
     assert_screen 'windows-restart', 600;
     send_key 'alt-r';
 }

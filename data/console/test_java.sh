@@ -53,7 +53,8 @@ clean_up() {
 find_all_installed_java() {
     # Construct temp files which are needed in order to
     # determine how many java versions are installed along with their versions
-    rpm -qa | grep ^java- > $RPM_QUERY_JAVA
+    # ignore javadoc as per issue https://progress.opensuse.org/issues/72070
+    rpm -qa | grep ^java- | grep -vE 'javadoc|-32bit' > $RPM_QUERY_JAVA
 
     # File that contains all the IBM Java installed in the system
     grep "^java-" $RPM_QUERY_JAVA | grep "\-ibm" | awk -F 'ibm' '{print $1 "ibm"}' | sort -r | uniq > $LIST_INSTALLED_IBM_VERSIONS
@@ -111,7 +112,7 @@ test_java_alternatives () {
 test_javac_alternatives () {
     list_all_javac_alternatives
 #    java_versions=$(cat $LIST_ALL_INSTALLED_VERSIONS | wc -l)
-    javac_versions=$(rpm -qa | grep -v debuginfo | grep -c 'java.*devel')
+    javac_versions=$(rpm -qa | grep 'java.*devel' | grep -c -vE 'debuginfo|32bit')
     javac_alternatives=$(wc -l < $LIST_ALL_JAVAC_ALTERNATIVES)
     if [ "$javac_versions" -eq "$javac_alternatives" ]; then
         echo "javac: PASS"
@@ -121,7 +122,7 @@ test_javac_alternatives () {
         echo "Number of java versions: $javac_versions and number of javac_alternatives $javac_alternatives"
         echo
         echo "List all javac_versions"
-        rpm -qa | grep 'java.*devel' | grep -v debuginfo
+        rpm -qa | grep 'java.*devel' | grep -vE 'debuginfo|32bit'
         echo "List all javac alternatives"
         cat $LIST_ALL_JAVAC_ALTERNATIVES
         exit 1
@@ -132,7 +133,7 @@ test_javac_alternatives () {
 test_javaplugin_alternatives () {
     list_all_javaplugin_alternatives
     # This exists only for java-ibm so far
-    java_plugins=$(rpm -qa | grep -c 'java.*plugin')
+    java_plugins=$(rpm -qa | grep 'java.*plugin' | grep -c -vE 'debuginfo|32bit')
     javaplugin_alternatives=$(wc -l < $LIST_ALL_JAVAPLUGIN_ALTERNATIVES)
     if [ "$java_plugins" -eq "$javaplugin_alternatives" ]; then
         echo "javaplugin: PASS"
@@ -181,96 +182,8 @@ check_version_active_vs_dot () {
     fi
 }
 
-# ==== #
-# MAIN # Testing starts here ...
-# ==== #
-
-clear
-echo "----------------------------"
-echo "Find installed Java versions"
-echo "----------------------------"
-find_all_installed_java;
-if is_java_installed; then
-    cat $LIST_ALL_INSTALLED_VERSIONS
-else
-    echo "No Java versions found on the system"
-    exit 1
-fi
-echo -e "\n------------------------------------------------------"
-echo "Test if there's an alternative per Java, Devel, Plugin"
-echo "------------------------------------------------------"
-test_java_alternatives
-test_javac_alternatives
-test_javaplugin_alternatives
-
-# Create hello world java source code
-create_hello_java
-
-echo -e "\n---------------------------------------------------------------------------------------"
-echo "Set java/javac/plugin update alternative for each Java version, compile/run Hello World"
-echo "---------------------------------------------------------------------------------------"
-
-# Start testing all java versions
-for java_version in $(cat $LIST_ALL_INSTALLED_VERSIONS); do
-    echo $java_version:
-    if [[ $java_version == *"gcj-compat"* ]]; then
-        echo "SKIPPING. We do not test BSK Repo"
-        continue
-    fi
-    # Current java under test
-    dot_version=$(echo $java_version | awk -F '-' '{print $2 "-" $3}' | sed 's/_/./g')
-    # Test if there's an alternativ for java, and if yes, set it as the current used one
-    if grep -q $dot_version $LIST_ALL_JAVA_ALTERNATIVES; then
-        java=$(grep $dot_version $LIST_ALL_JAVA_ALTERNATIVES)
-        update-alternatives --set java $java
-    else
-        echo "Error: java alternative not found for $java_version"
-        exit 1
-    fi
-    # Test if there's an alternative for javac, and if yes, set it as the current used one
-    if grep -q $dot_version $LIST_ALL_JAVAC_ALTERNATIVES; then
-        javac=$(grep $dot_version $LIST_ALL_JAVAC_ALTERNATIVES)
-        update-alternatives --set javac $javac
-    else
-        if echo $java_version | grep -q ibm; then
-            if ! rpm -qa | grep 'java.*devel' | grep -q $dot_version; then
-                echo "Warning: java compiler alternative not found for $java_version"
-                echo "Reason : devel pkg is not installed, thus it is normal there is not javac"
-                if zypper products -i | grep -q sle-sdk; then
-                    echo "Status : Error! The devel pkg should be installed. Check your repos!"
-                    exit 1
-                else
-                    echo "Status : Accepted because there is no SDK installed in the SUT"
-                fi
-                echo "SKIP Testing $java_version"
-                echo
-                continue
-            fi
-        fi
-        echo "Error: java compiler alternative not found for $java_version"
-        exit 1
-    fi
-    # Test if there's an alternativ for javaplugin, and if yes, set it as the current used one
-    # So far, only java-ibm offers this
-    if [[ $(uname -m) -ne "s390x" ]]; then
-        if echo $java_version | grep -q ibm; then
-            if grep $dot_version $LIST_ALL_JAVAPLUGIN_ALTERNATIVES > /dev/null; then
-                javaplugin=$(grep $dot_version $LIST_ALL_JAVAPLUGIN_ALTERNATIVES)
-                update-alternatives --set javaplugin $javaplugin
-            else
-                echo "Error: java plugin alternative not found for $java_version"
-                exit 1
-            fi
-        fi
-    fi
-
-    # Test version active (linked)
-    test_java_version_active
-    test_javac_version_active
-    check_version_active_vs_dot "$java_version_active" "java"
-    check_version_active_vs_dot "$javac_version_active" "javac"
-
-    # Compile Hello World
+compile_hello_world () {
+# Compile Hello World
     javac $HELLO_WORLD
     rq=$?
     if [ $rq -ne 0 ]; then
@@ -297,7 +210,107 @@ for java_version in $(cat $LIST_ALL_INSTALLED_VERSIONS); do
     # Delete the successfully compiled files: class and binary of Hello World
     rm $HELLO.class
     echo
-done
+}
+
+# ==== #
+# MAIN # Testing starts here ...
+# ==== #
+
+clear
+echo "----------------------------"
+echo "Find installed Java versions"
+echo "----------------------------"
+find_all_installed_java;
+if is_java_installed; then
+    cat $LIST_ALL_INSTALLED_VERSIONS
+else
+    echo "No Java versions found on the system"
+    exit 1
+fi
+echo -e "\n------------------------------------------------------"
+echo "Test if there's an alternative per Java, Devel, Plugin"
+echo "------------------------------------------------------"
+test_java_alternatives
+test_javac_alternatives
+test_javaplugin_alternatives
+
+# Create hello world java source code
+create_hello_java
+
+if [[ "$1" != "--transactional-server" ]]; then
+    echo -e "\n---------------------------------------------------------------------------------------"
+    echo "Set java/javac/plugin update alternative for each Java version, compile/run Hello World"
+    echo "---------------------------------------------------------------------------------------"
+
+    # Start testing all java versions
+    for java_version in $(cat $LIST_ALL_INSTALLED_VERSIONS); do
+        echo $java_version:
+        if [[ $java_version == *"gcj-compat"* ]]; then
+	    echo "SKIPPING. We do not test BSK Repo"
+	    continue
+        fi
+        # Current java under test
+        dot_version=$(echo $java_version | awk -F '-' '{print $2 "-" $3}' | sed 's/_/./g')
+        # Test if there's an alternativ for java, and if yes, set it as the current used one
+        if grep -q $dot_version $LIST_ALL_JAVA_ALTERNATIVES; then
+	    java=$(grep $dot_version $LIST_ALL_JAVA_ALTERNATIVES)
+	    update-alternatives --set java $java
+        else
+	    echo "Error: java alternative not found for $java_version"
+	    exit 1
+        fi
+        # Test if there's an alternative for javac, and if yes, set it as the current used one
+        if grep -q $dot_version $LIST_ALL_JAVAC_ALTERNATIVES; then
+	    javac=$(grep $dot_version $LIST_ALL_JAVAC_ALTERNATIVES)
+	    update-alternatives --set javac $javac
+        else
+	    if echo $java_version | grep -q ibm; then
+	        if ! rpm -qa | grep 'java.*devel' | grep -v "32bit" | grep -q $dot_version; then
+		    echo "Warning: java compiler alternative not found for $java_version"
+		    echo "Reason : devel pkg is not installed, thus it is normal there is not javac"
+		    if zypper products -i | grep -q sle-sdk; then
+		        echo "Status : Error! The devel pkg should be installed. Check your repos!"
+		        exit 1
+		    else
+		        echo "Status : Accepted because there is no SDK installed in the SUT"
+		    fi
+		    echo "SKIP Testing $java_version"
+		    echo
+		    continue
+	        fi
+	    fi
+	    echo "Error: java compiler alternative not found for $java_version"
+	    exit 1
+        fi
+        # Test if there's an alternativ for javaplugin, and if yes, set it as the current used one
+        # So far, only java-ibm offers this
+        if [[ $(uname -m) -ne "s390x" ]]; then
+	    if echo $java_version | grep -q ibm; then
+	        if grep $dot_version $LIST_ALL_JAVAPLUGIN_ALTERNATIVES > /dev/null; then
+		    javaplugin=$(grep $dot_version $LIST_ALL_JAVAPLUGIN_ALTERNATIVES)
+		    update-alternatives --set javaplugin $javaplugin
+	        else
+		    echo "Error: java plugin alternative not found for $java_version"
+		    exit 1
+	        fi
+	    fi
+        fi
+
+        # Test version active (linked)
+        test_java_version_active
+        test_javac_version_active
+        check_version_active_vs_dot "$java_version_active" "java"
+        check_version_active_vs_dot "$javac_version_active" "javac"
+        #Compile Hello World
+        compile_hello_world
+    done
+else 
+    echo -e "\n-----------------------------------------------------------------------------------------------------------------"
+    echo "Skip java/javac/plugin update alternative and some tests because of read-only file system on transactional server."
+    echo "see also jsc#SLE-9101"
+    echo "-----------------------------------------------------------------------------------------------------------------"
+    compile_hello_world
+fi
 
 # Breakdown
 clean_up;

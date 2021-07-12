@@ -7,6 +7,8 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 # Description: Basic Ant test
+#
+# Package: ant
 # Summary: Runs an ant build file that compiles a sample java code,
 #          creates a jar file and runs it.
 # Maintainer: George Gkioulis <ggkioulis@suse.com>
@@ -95,9 +97,9 @@ sub run {
     assert_script_run "echo '$build_file_xml' >> build.xml";
 
     # Check that ant builds succesfully
-    assert_script_run "ant";
+    assert_script_run "ant --noconfig";
     # Check that ant runs the application succesfully
-    assert_script_run 'ant run| grep "Hello World"';
+    assert_script_run 'ant --noconfig run| grep "Hello World"';
 }
 
 1;

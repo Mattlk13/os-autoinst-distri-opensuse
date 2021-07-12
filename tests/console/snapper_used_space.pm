@@ -1,28 +1,29 @@
 # SUSE's openQA tests
 #
-# Copyright © 2018 SUSE LLC
+# Copyright © 2018-2021 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: snapper btrfsprogs
 # Summary: Display of used space per snapshot
 # Tags: poo#17848
 # - Check if quota is enabled
 # - Display the exclusive space used by each snapshot
 # - Query the exclusive space when data is included in a single snapshot
 # - Query the exclusive space when data is included in several snapshots (pre- and post-)
-# Maintainer: Joaquín Rivera <jeriveramoya@suse.com>
+# Maintainer: QE YaST <qa-sle-yast@suse.de>
 
 use base 'btrfs_test';
 use strict;
 use warnings;
 use testapi;
 
-use constant COLUMN_FILTER    => "awk -F '|' '{print \$1  \$6}'";                   # Filter by columns: # and Used Space
-use constant SUBVOLUME_FILTER => "tail -n4 | sed -n 2,3p | cut -d ' ' -f2";         # Subvolume IDs
-use constant CREATE_BIG_FILE  => "dd if=/dev/zero of=/big-data bs=1M count=1024";
+use constant COLUMN_FILTER    => "awk -F '|' '{print \$1  \$6}'";              # Filter by columns: # and Used Space
+use constant SUBVOLUME_FILTER => "tail -n4 | sed -n 2,3p | cut -d ' ' -f2";    # Subvolume IDs
+use constant CREATE_BIG_FILE  => "touch /big-data && btrfs prop set /big-data compression '' && dd if=/dev/zero of=/big-data bs=1M count=1024";
 use constant REMOVE_BIG_FILE  => "rm /big-data";
 
 =head2 ensure_size_displayed
@@ -71,7 +72,7 @@ sub query_space_several_snapshot {
     # Create a new higher level qgroup
     assert_script_run 'btrfs qgroup create 1/1 /';
     # Add snapshots to the group
-    assert_script_run "btrfs qgroup assign 0/$_ 1/1 /" foreach (@ids);
+    assert_script_run "btrfs qgroup assign --no-rescan 0/$_ 1/1 /" foreach (@ids);
     # run quota
     assert_script_run 'btrfs quota rescan -w /';
     # query the exclusive space
@@ -79,7 +80,8 @@ sub query_space_several_snapshot {
 }
 
 sub run {
-    select_console 'root-console';
+    my $self = shift;
+    $self->select_serial_terminal;
     die 'Quota must be enabled on btrfs for this test' if (script_run('snapper get-config | grep QGROUP') != 0);
     ensure_size_displayed;
     query_space_single_snapshot;

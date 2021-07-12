@@ -8,9 +8,10 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: zypper
 # Summary: Full patch system using zypper
 # - Calls zypper in quiet mode and patch system
-# Maintainer: Oliver Kurz <okurz@suse.de>
+# Maintainer: QA SLE YaST team <qa-sle-yast@suse.de>
 
 use base "y2_module_consoletest";
 use strict;
@@ -20,7 +21,7 @@ use utils;
 
 sub run {
     select_console 'root-console';
-    pkcon_quit;
+    quit_packagekit;
     fully_patch_system;
     assert_script_run("rpm -q libzypp zypper");
 

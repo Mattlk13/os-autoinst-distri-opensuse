@@ -8,12 +8,13 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: eog
 # Summary: eye of gnome image viewer
 # - Installs eog if necessary
 # - Launch eog
 # - Check if eog is running
 # - Close eog
-# Maintainer: Oliver Kurz <okurz@suse.de>
+# Maintainer: QE Core <qe-core@suse.de>
 
 use base "x11test";
 use strict;

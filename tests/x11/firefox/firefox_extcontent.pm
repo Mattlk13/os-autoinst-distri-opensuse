@@ -8,6 +8,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: MozillaFirefox
 # Summary: Firefox: Externally handled content (Case#1436064)
 # - Launch xterm, kill firefox, cleanup previous firefox configuration, launch
 # firefox
@@ -30,13 +31,13 @@ sub run {
     my ($self) = @_;
 
     $self->start_firefox_with_profile;
-    $self->firefox_open_url('http://mirror.bej.suse.com/dist/install/SLP/SLE-12-SP3-Server-GM/x86_64/dvd1/');
+    $self->firefox_open_url('http://mirror.suse.cz/install/SLP/SLE-12-SP5-Server-GM/x86_64/DVD1/');
 
     assert_screen('firefox-extcontent-pageloaded');
 
     send_key "/";
     sleep 1;
-    type_string "license.tar.gz\n";
+    enter_cmd "license.tar.gz";
 
     assert_screen('firefox-extcontent-opening', 60);
 

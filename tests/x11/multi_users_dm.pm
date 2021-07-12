@@ -19,11 +19,11 @@ use strict;
 use warnings;
 use testapi;
 use utils;
-use x11utils qw(handle_login handle_logout untick_welcome_on_next_startup);
+use x11utils qw(handle_login handle_logout handle_welcome_screen);
 use main_common 'opensuse_welcome_applicable';
 
 sub ensure_multi_user_target {
-    type_string "systemctl isolate multi-user.target\n";
+    enter_cmd "systemctl isolate multi-user.target";
     wait_still_screen 5;
     send_key "ctrl-alt-f" . get_root_console_tty;
     wait_screen_change {
@@ -36,16 +36,8 @@ sub ensure_multi_user_target {
 }
 
 sub ensure_graphical_target {
-    type_string "systemctl isolate graphical.target\n";
+    enter_cmd "systemctl isolate graphical.target";
     reset_consoles;
-}
-
-sub restart_x11 {
-    my ($self, %args) = @_;
-    $args{setnologin} //= 0;
-    record_soft_failure('bsc#1063060 workaround for graphical errors on cirrus when restarting X11 -> performing reboot');
-    type_string "reboot\n";
-    $self->wait_boot(nologin => $args{setnologin}, forcenologin => $args{setnologin});
 }
 
 sub run {
@@ -55,52 +47,54 @@ sub run {
     my $users_to_create    = 100;
     my $encrypted_password = crypt($password, "abcsalt");
 
-    # login
-    select_console 'root-console';
-
     # disable autologin
-    script_run "sed -i.bak '/^DISPLAYMANAGER_AUTOLOGIN=/s/=.*/=\"\"/' /etc/sysconfig/displaymanager";
+    select_console 'root-console';
+    assert_script_run "sed -i.bak '/^DISPLAYMANAGER_AUTOLOGIN=/s/=.*/=\"\"/' /etc/sysconfig/displaymanager";
     assert_script_run "~$username/data/create_users $users_to_create \"$encrypted_password\"";
-    $self->restart_x11(setnologin => 1);
 
     # login created user
+    select_console 'x11';
+    handle_logout;
     assert_screen 'multi_users_dm', 180;    # gnome loading takes long sometimes
     wait_still_screen;
     if (check_var('DESKTOP', 'gnome')) {
         wait_screen_change { assert_and_click('user_not_listed') };
     }
     elsif (check_var('DESKTOP', 'xfce')) {
-        send_key 'down';                    # select created user #01
+        # select created user #01
+        send_key_until_needlematch(['user-01-selected', 'user-freetext-input-selected'], 'down', 1, 3);
+        if (match_has_tag 'user-freetext-input-selected') {
+            enter_cmd "$user";
+        }
     }
     elsif (check_var('DESKTOP', 'kde')) {
         wait_screen_change { send_key 'shift-tab' };
         send_key 'ctrl-a';
-        type_string "$user\n";
+        enter_cmd "$user";
     }
     # Make sure screen changed before calling handle_login function (for slow workers)
     wait_still_screen;
     handle_login($user, 1);
-    if (opensuse_welcome_applicable) {
-        assert_screen 'opensuse-welcome', 120;
-        # Close welcome screen
-        untick_welcome_on_next_startup;
-    }
+    handle_welcome_screen(timeout => 120) if (opensuse_welcome_applicable);
     assert_screen 'generic-desktop', 60;
+    send_key 'esc' if match_has_tag('gnome-activities');
     # verify correct user is logged in
     x11_start_program('xterm');
     wait_still_screen;
-    type_string "whoami|grep $user > /tmp/whoami.log\n";
+    enter_cmd "whoami|grep $user > /tmp/whoami.log";
     assert_script_sudo "grep $user /tmp/whoami.log";
     # logout user
     handle_logout;
-    wait_still_screen;
+    # Wait some more seconds before selecting root-console, as it fails sporadically in aarch64
+    wait_still_screen 10;
 
     # restore previous config
     select_console 'root-console';
     script_run "mv /etc/sysconfig/displaymanager.bak /etc/sysconfig/displaymanager";
     assert_script_run "~$username/data/delete_users $users_to_create";
     script_run "clear";
-    $self->restart_x11;
+    assert_script_run "rcxdm restart";
+    select_console 'x11';
     # after restart of X11 give the desktop a bit more time to show up to
     # prevent the post_run_hook to fail being too impatient
     assert_screen 'generic-desktop', 600;

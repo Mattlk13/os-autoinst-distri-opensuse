@@ -1,4 +1,4 @@
-# Copyright (C) 2019 SUSE LLC
+# Copyright (C) 2019-2020 SUSE LLC
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -13,6 +13,8 @@
 # You should have received a copy of the GNU General Public License along
 # with this program; if not, see <http://www.gnu.org/licenses/>.
 #
+# Package: samba samba-client yast2-samba-client yast2-samba-server nautilus
+# apparmor-utils
 # Summary: Test with "usr.sbin.smbd" is in "enforce" mode and AppArmor is
 #          "enabled && active", access the shared directory should have no error.
 # - Install samba samba-client yast2-samba-client yast2-samba-server
@@ -54,7 +56,7 @@ sub samba_server_setup {
     systemctl("restart smb");
 
     select_console 'x11';
-    y2_module_guitest::launch_yast2_module_x11(module => "samba-server", target_match => "samba-server-installation", match_timeout => 200);
+    y2_module_guitest::launch_yast2_module_x11("samba-server", target_match => "samba-server-installation", match_timeout => 200);
 
     send_key "alt-w";
     send_key "ctrl-a";
@@ -109,6 +111,7 @@ sub samba_client_access {
     send_key_until_needlematch("nautilus-connect-to-server", 'tab', 10, 2);
     type_string("smb://$ip");
     send_key "ret";
+    wait_still_screen(2);
 
     # Search the shared dir
     send_key_until_needlematch("nautilus-sharedir-search", 'ctrl-f', 5, 2);
@@ -135,8 +138,9 @@ sub samba_client_access {
     assert_screen("nautilus-sharedir-opened");
 
     # Do some operations, e.g., create a test folder then delete it
-    send_key "shift-ctrl-n";
-    wait_still_screen(2);
+    assert_and_click("nautilus-open-menu");
+    assert_and_click("nautilus-new-folder");
+    assert_screen("nautilus-folder-name-input-box");
     type_string("sub-testdir", wait_screen_changes => 10);
     send_key "ret";
     send_key_until_needlematch("nautilus-sharedir-delete", "delete", 5, 2);

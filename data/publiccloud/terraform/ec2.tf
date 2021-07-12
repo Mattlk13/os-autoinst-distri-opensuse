@@ -1,3 +1,16 @@
+terraform {
+  required_providers {
+    aws = {
+      version = "= 3.37.0"
+      source = "hashicorp/aws"
+    }
+    random = {
+      version = "= 3.1.0"
+      source = "hashicorp/random"
+    }
+  }
+}
+
 variable "region" {
     default = "eu-central-1"
 }
@@ -60,7 +73,7 @@ resource "aws_security_group" "basic_sg" {
         from_port   = 0
         to_port     = 0
         protocol    = "-1"
-        cidr_blocks = ["213.151.95.130/32", "195.135.220.0/22"]
+        cidr_blocks = ["213.151.95.130/32", "195.135.220.0/22", "195.250.132.144/29"]
     }
 
     egress {
@@ -72,8 +85,8 @@ resource "aws_security_group" "basic_sg" {
 
     tags = merge({
             openqa_created_by = var.name
-            openqa_created_date = "${timestamp()}"
-            openqa_created_id = "${element(random_id.service.*.hex, 0)}"
+            openqa_created_date = timestamp()
+            openqa_created_id = element(random_id.service.*.hex, 0)
         }, var.tags)
 }
 
@@ -82,12 +95,12 @@ resource "aws_instance" "openqa" {
     ami             = var.image_id
     instance_type   = var.type
     key_name        = aws_key_pair.openqa-keypair.key_name
-    security_groups = ["${aws_security_group.basic_sg.name}"]
+    security_groups = [aws_security_group.basic_sg.name]
 
     tags = merge({
             openqa_created_by = var.name
-            openqa_created_date = "${timestamp()}"
-            openqa_created_id = "${element(random_id.service.*.hex, count.index)}"
+            openqa_created_date = timestamp()
+            openqa_created_id = element(random_id.service.*.hex, count.index)
         }, var.tags)
 }
 
@@ -105,15 +118,15 @@ resource "aws_ebs_volume" "ssd_disk" {
     type              = var.extra-disk-type
     tags = merge({
             openqa_created_by = var.name
-            openqa_created_date = "${timestamp()}"
-            openqa_created_id = "${element(random_id.service.*.hex, count.index)}"
+            openqa_created_date = timestamp()
+            openqa_created_id = element(random_id.service.*.hex, count.index)
         }, var.tags)
 }
 
 output "public_ip" {
-    value = "${aws_instance.openqa.*.public_ip}"
+    value = aws_instance.openqa.*.public_ip
 }
 
 output "vm_name" {
-    value = "${aws_instance.openqa.*.id}"
+    value = aws_instance.openqa.*.id
 }

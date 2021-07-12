@@ -4,7 +4,8 @@
 
 use strict;
 use warnings;
-use YAML::Tiny;
+use YAML::PP;
+use YAML::PP::Schema::Include;
 use File::Basename;
 use Data::Dumper;
 
@@ -16,21 +17,39 @@ Get test modules list from 'schedule' and 'conditional_schedule' sections of
 YAML schedule file.
 
 =cut
+
 sub parse_modules_in_schedule {
     my ($schedule_file_path) = @_;
-    my $schedule = YAML::Tiny::LoadFile($schedule_file_path);
+
+    my $root_project_dir = dirname(__FILE__) . '/../';
+    my $include          = YAML::PP::Schema::Include->new(paths => ($root_project_dir));
+    my $ypp              = YAML::PP->new(schema => ['Core', $include, 'Merge']);
+    $include->yp($ypp);
+    my $schedule = $ypp->load_file($schedule_file_path);
+
     my @scheduled;
     for my $module (@{$schedule->{schedule}}) {
-        push(@scheduled, $module) && next unless ($module =~ s/\{\{(.*)\}\}/$1/);
+        push(@scheduled, parse_schedule_module($schedule, $module));
+    }
+    return @scheduled;
+}
+
+sub parse_schedule_module {
+    my ($schedule, $module) = @_;
+    my @scheduled;
+    if ($module =~ s/\{\{(.*)\}\}/$1/) {
         # Module is scheduled conditionally. Need to be parsed. Get condition hash
         my $condition = $schedule->{conditional_schedule}->{$module};
         # Iterate over variables in the condition
         foreach my $var (keys %{$condition}) {
-            foreach my $val (keys %{$condition->{$var}}){
+            foreach my $val (keys %{$condition->{$var}}) {
                 # Iterate over the list of the modules to be loaded
-                push(@scheduled, $_) for (@{$condition->{$var}->{$val}});
+                push(@scheduled, parse_schedule_module($schedule, $_)) for (@{$condition->{$var}->{$val}});
             }
         }
+    }
+    else {
+        push(@scheduled, $module);
     }
     return @scheduled;
 }
@@ -44,6 +63,7 @@ C<$test_module> is file path relative to 'tests' directory, without file
 extension (as specified in YAML schedule file, e.g. 'boot/boot_to_desktop').
 
 =cut
+
 sub is_test_module_exist {
     my ($test_module) = @_;
     return (-f "tests/$test_module.pm") ? 1 : 0;
@@ -56,7 +76,7 @@ my @nonexistent_modules = ();
 foreach my $schedule_file (@ARGV) {
     foreach my $test_module (parse_modules_in_schedule($schedule_file)) {
         unless (is_test_module_exist($test_module)) {
-            push @nonexistent_modules, { test_module => $test_module, schedule_file => $schedule_file };
+            push @nonexistent_modules, {test_module => $test_module, schedule_file => $schedule_file};
         }
     }
 }
@@ -64,7 +84,7 @@ foreach my $schedule_file (@ARGV) {
 # Show the nonexistent test modules in logs output and fail the test.
 if (@nonexistent_modules) {
     print "Fail! YAML schedule files contain test modules that do not exist in the project. Please, see the list below:\n\n";
-    foreach my $file (@nonexistent_modules){
+    foreach my $file (@nonexistent_modules) {
         print "\'$file->{test_module}\' test module in \'$file->{schedule_file}\' schedule file.\n";
     }
     exit 1;

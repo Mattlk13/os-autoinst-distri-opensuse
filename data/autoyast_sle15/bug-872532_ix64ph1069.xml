@@ -25,13 +25,10 @@
       <gfxtheme>/boot/grub2/themes/SLE/theme.txt</gfxtheme>
       <hiddenmenu>false</hiddenmenu>
       <os_prober>true</os_prober>
-      <suse_btrfs>true</suse_btrfs>
       <timeout config:type="integer">-1</timeout>
       <xen_kernel_append> splash=silent quiet showopts</xen_kernel_append>
     </global>
     <loader_type>grub2</loader_type>
-    <sections config:type="list">
-    </sections>
   </bootloader>
   <deploy_image>
     <image_installation config:type="boolean">false</image_installation>
@@ -51,7 +48,6 @@
       <import_gpg_key config:type="boolean">true</import_gpg_key>
     </signature-handling>
     <storage>
-      <partition_alignment config:type="symbol">align_optimal</partition_alignment>
       <start_multipath config:type="boolean">false</start_multipath>
     </storage>
   </general>
@@ -665,7 +661,6 @@
     </services>
   </services-manager>
   <software>
-    <image/>
     <instsource/>
     <packages config:type="list">
       <package>dconf</package>
@@ -685,7 +680,6 @@
       <package>yast2-nis-client</package>
       <package>yast2-printer</package>
       <package>yast2-snapper</package>
-      <package>yast2-trans-en_US</package>
     </packages>
     <patterns config:type="list">
       <pattern>minimal_base</pattern>

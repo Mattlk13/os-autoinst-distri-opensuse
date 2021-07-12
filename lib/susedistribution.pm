@@ -8,7 +8,7 @@ use utils qw(
   ensure_serialdev_permissions
   get_root_console_tty
   get_x11_console_tty
-  pkcon_quit
+  quit_packagekit
   save_svirt_pty
   type_string_slow
   type_string_very_slow
@@ -18,7 +18,6 @@ use version_utils qw(is_hyperv_in_gui is_sle is_leap is_svirt_except_s390x is_tu
 use x11utils qw(desktop_runner_hotkey ensure_unlocked_desktop);
 use Utils::Backends qw(has_serial_over_ssh set_sshserial_dev use_ssh_serial_console is_remote_backend);
 use backend::svirt qw(SERIAL_TERMINAL_DEFAULT_DEVICE SERIAL_TERMINAL_DEFAULT_PORT);
-use publiccloud::ssh_interactive 'ssh_interactive_join';
 use Cwd;
 use autotest 'query_isotovideo';
 
@@ -30,8 +29,8 @@ Base class implementation of distribution class necessary for testapi
 =cut
 
 # don't import script_run - it will overwrite script_run from distribution and create a recursion
-use testapi qw(send_key %cmd assert_screen check_screen check_var get_var save_screenshot
-  match_has_tag set_var type_password type_string wait_serial $serialdev
+use testapi qw(send_key %cmd assert_screen check_screen check_var click_lastmatch get_var save_screenshot
+  match_has_tag set_var type_password type_string enter_cmd wait_serial $serialdev
   mouse_hide send_key_until_needlematch record_info record_soft_failure
   wait_still_screen wait_screen_change get_required_var diag);
 
@@ -45,7 +44,7 @@ sub handle_password_prompt {
     $console //= '';
 
     return if get_var("LIVETEST") || get_var('LIVECD');
-    assert_screen "password-prompt";
+    assert_screen("password-prompt", 60);
     if ($console eq 'hyperv-intermediary') {
         type_string get_required_var('VIRSH_GUEST_PASSWORD');
     }
@@ -160,6 +159,9 @@ sub init_cmd {
         $testapi::cmd{sync_without_daemon} = "alt-s";
     }
     ## keyboard cmd vars end
+    if (check_var('VIDEOMODE', 'text') && check_var('SCC_REGISTER', 'installation')) {
+        $testapi::cmd{expertpartitioner} = "alt-x";
+    }
 }
 
 =head2 init_desktop_runner
@@ -272,7 +274,7 @@ sub x11_start_program {
     # As above especially krunner seems to take some time before disappearing
     # after 'ret' press we should wait in this case nevertheless
     wait_still_screen(3, similarity_level => 45) unless ($args{no_wait} || ($args{valid} && $args{target_match} && !check_var('DESKTOP', 'kde')));
-    return unless $args{valid};
+    return                                       unless $args{valid};
     set_var('IN_X11_START_PROGRAM', $program);
     my @target = ref $args{target_match} eq 'ARRAY' ? @{$args{target_match}} : $args{target_match};
     for (1 .. 3) {
@@ -291,9 +293,9 @@ sub x11_start_program {
 sub _ensure_installed_zypper_fallback {
     my ($self, $pkglist) = @_;
     $self->become_root;
-    pkcon_quit;
+    quit_packagekit;
     zypper_call "in $pkglist";
-    type_string "exit\n";
+    enter_cmd "exit";
 }
 
 =head2 ensure_installed
@@ -303,52 +305,13 @@ Ensure that a package is installed
 sub ensure_installed {
     my ($self, $pkgs, %args) = @_;
     my $pkglist = ref $pkgs eq 'ARRAY' ? join ' ', @$pkgs : $pkgs;
-    # aarch64 is known to be our slowest architecture in many regards,
-    # especially when it is about I/O so be a bit more forgiving here
-    $args{timeout} //= check_var('ARCH', 'aarch64') ? 300 : 90;
+    $args{timeout} //= 90;
 
     testapi::x11_start_program('xterm');
     $self->become_root;
     ensure_serialdev_permissions;
-
-    # make sure packagekit service is available
-    testapi::assert_script_run('systemctl is-active -q packagekit || (systemctl unmask -q packagekit ; systemctl start -q packagekit)');
-    type_string "exit\n";
-    $self->script_run("pkcon install -yp $pkglist; echo pkcon-status-\$? | tee /dev/$testapi::serialdev", 0);
-    my @tags = qw(Policykit Policykit-behind-window pkcon-finished);
-    while (1) {
-        last unless @tags;
-        my $ret = check_screen(\@tags, $args{timeout});
-        last unless $ret;
-        last if (match_has_tag('pkcon-finished'));
-        if (match_has_tag('Policykit')) {
-            type_password;
-            send_key 'ret';
-            @tags = grep { $_ ne 'Policykit' } @tags;
-            @tags = grep { $_ ne 'Policykit-behind-window' } @tags;
-            next;
-        }
-        if (match_has_tag('Policykit-behind-window')) {
-            wait_screen_change { send_key 'alt-tab' };
-            next;
-        }
-    }
-    my $ret = wait_serial('pkcon-status-\d+');
-    if ($ret =~ /pkcon-status-4/) {
-        $self->_ensure_installed_zypper_fallback($pkglist);
-        record_soft_failure "boo#1091353 - pkcon doesn't find existing pkg - falling back to zypper";
-    }
-    elsif ($ret =~ /pkcon-status-5/) {
-        record_info 'pkcon failed', 'Return value meaning: "Nothing useful was done", trying fallback to zypper"';
-        $self->_ensure_installed_zypper_fallback($pkglist);
-        record_soft_failure 'boo#1100134 - pkcon randomly fails to download packages';
-    }
-    elsif ($ret =~ /pkcon-status-7/) {
-        record_info 'pkcon succeeded: no package needed be installed. Requested package already up-to-date';
-    }
-    elsif ($ret !~ /pkcon-status-0/) {
-        die "pkcon install did not succeed, return code: $ret";
-    }
+    quit_packagekit;
+    zypper_call "in $pkglist";
     wait_still_screen 1;
     send_key("alt-f4");    # close xterm
     assert_screen 'generic-desktop' if is_opensuse;
@@ -363,13 +326,18 @@ sub script_sudo {
 
     my $str = time;
     if ($wait > 0) {
-        $prog = "$prog; echo $str-\$?- > /dev/$testapi::serialdev";
+        $prog = "$prog; echo $str-\$?- > /dev/$testapi::serialdev" unless $prog eq 'bash';
     }
-    type_string "clear\n";    # poo#13710
-    type_string "su -c \'$prog\'\n";
+    enter_cmd "clear";    # poo#13710
+    enter_cmd "su -c \'$prog\'", max_interval => 125;
     handle_password_prompt unless ($testapi::username eq 'root');
     if ($wait > 0) {
-        return wait_serial("$str-\\d+-");
+        if ($prog eq 'bash') {
+            return wait_still_screen(4, 8);
+        }
+        else {
+            return wait_serial("$str-\\d+-");
+        }
     }
     return;
 }
@@ -389,11 +357,11 @@ sub set_standard_prompt {
     my $prompt_sign = $user eq 'root' ? '#' : '$';
     if ($os_type eq 'windows') {
         $prompt_sign = $user eq 'root' ? '# ' : '$$ ';
-        type_string "prompt $prompt_sign\n";
-        type_string "cls\n";    # clear the screen
+        enter_cmd "prompt $prompt_sign";
+        enter_cmd "cls";    # clear the screen
     }
     elsif ($os_type eq 'linux') {
-        type_string "which tput 2>&1 && PS1=\"\\\[\$(tput bold 2; tput setaf 1)\\\]$prompt_sign\\\[\$(tput sgr0)\\\] \"\n";
+        enter_cmd "which tput 2>&1 && PS1=\"\\\[\$(tput bold 2; tput setaf 1)\\\]$prompt_sign\\\[\$(tput sgr0)\\\] \"";
     }
 }
 
@@ -404,14 +372,14 @@ Log in as root in the current console
 sub become_root {
     my ($self) = @_;
 
-    $self->script_sudo('bash', 0);
+    $self->script_sudo('bash', 1);
     # No need to apply on more recent kernels
     if (is_sle('<=15-SP2') || is_leap('<=15.2')) {
         disable_serial_getty() unless $self->script_run("systemctl is-enabled serial-getty\@$testapi::serialdev");
     }
-    type_string "cd /tmp\n";
+    enter_cmd "cd /tmp";
     $self->set_standard_prompt('root');
-    type_string "clear\n";
+    enter_cmd "clear";
 }
 
 =head2 init_consoles
@@ -432,6 +400,28 @@ sub init_consoles {
         for (my $num = 1; $num < get_var('VIRTIO_CONSOLE_NUM', 1); $num++) {
             $self->add_console('root-virtio-terminal' . $num, 'virtio-terminal', {socked_path => cwd() . '/virtio_console' . $num});
         }
+    }
+
+    if (get_var('SUT_IP') || get_var('VIRSH_GUEST')) {
+        my $hostname = get_var('SUT_IP', get_var('VIRSH_GUEST'));
+
+        $self->add_console(
+            'root-serial-ssh',
+            'ssh-serial',
+            {
+                hostname => $hostname,
+                password => $testapi::password,
+                user     => 'root'
+            });
+
+        $self->add_console(
+            'user-serial-ssh',
+            'ssh-serial',
+            {
+                hostname => $hostname,
+                password => $testapi::password,
+                user     => $testapi::username
+            });
     }
 
     # svirt backend, except s390x ARCH
@@ -488,7 +478,7 @@ sub init_consoles {
                 hostname => get_required_var('SUT_IP'),
                 password => $testapi::password,
                 user     => 'root',
-                serial   => 'mkfifo /dev/sshserial; tail -fn +1 /dev/sshserial',
+                serial   => 'rm -f /dev/sshserial; mkfifo /dev/sshserial; chmod 666 /dev/sshserial; while true; do cat /dev/sshserial; done',
                 gui      => 1
             });
     }
@@ -640,7 +630,7 @@ Make sure the right user is logged in, e.g. when using remote shells
 =cut
 sub ensure_user {
     my ($user) = @_;
-    type_string("su - $user\n") if $user ne 'root';
+    enter_cmd(sprintf('test "$(id -un)" == "%s" || su - "%s"', $user, $user)) if $user ne 'root';
 }
 
 =head2 hyperv_console_switch
@@ -669,12 +659,17 @@ sub hyperv_console_switch {
         set_var('CONSOLE_JUST_ACTIVATED', 0);
         return;
     }
-    die 'hyperv_console_switch: Console was not provided' unless $console;
+    die 'hyperv_console_switch: Console was not provided'         unless $console;
     diag 'hyperv_console_switch: Console number was not provided' unless $nr;
     # If we are in VT, 'Alt-Fx' switch already worked
     return if check_screen('any-console', 10);
     # We are in X11 and wan't to switch to VT
-    testapi::x11_start_program('xterm');
+    if (check_var('DESKTOP', 'textmode') && check_var('VIDEOMODE', 'text')) {
+        testapi::assert_still_screen { enter_cmd "xinit /usr/bin/xterm -- :1 &" };
+        testapi::mouse_set(10, 10);
+    } else {
+        testapi::x11_start_program('xterm');
+    }
     self->distribution::script_sudo("exec chvt $nr; exit", 0);
 }
 
@@ -697,7 +692,7 @@ sub console_nr {
 
 =head2 activate_console
 
-  activate_console($console [, [ensure_tty_selected => 0|1, ] [skip_set_standard_prompt => 0|1, ] [skip_setterm => 0|1, ]])
+  activate_console($console [, [ensure_tty_selected => 0|1] [, skip_set_standard_prompt => 0|1] [, skip_setterm => 0|1] [, timeout => $timeout]])
 
 Callback whenever a console is selected for the first time. Accepts arguments
 provided to select_console().
@@ -707,18 +702,21 @@ e.g. if you want select_console() without addition console setup. Then, at some
 point, you should set it on your own.
 
 Option C<ensure_tty_selected> ensures TTY is selected.
+
+C<timeout> is set on the internal C<assert_screen> call and can be set to
+configure a timeout value different than default.
 =cut
 sub activate_console {
     my ($self, $console, %args) = @_;
 
     # Select configure serial and redirect to root-ssh instead
-    return use_ssh_serial_console if (get_var('BACKEND', '') =~ /ikvm|ipmi|spvm|pvm_hmc/ && $console =~ m/root-console$|install-shell|log-console/);
+    return use_ssh_serial_console if (get_var('BACKEND', '') =~ /ikvm|ipmi|spvm|pvm_hmc/ && $console =~ m/^(root-console|install-shell|log-console)$/);
     if ($console eq 'install-shell') {
         if (get_var("LIVECD")) {
             # LIVE CDa do not run inst-consoles as started by inst-linux (it's regular live run, auto-starting yast live installer)
             assert_screen "tty2-selected", 10;
             # login as root, who does not have a password on Live-CDs
-            wait_screen_change { type_string "root\n" };
+            wait_screen_change { enter_cmd "root" };
         }
         else {
             # on s390x we need to login here by providing a password
@@ -743,7 +741,7 @@ sub activate_console {
     diag "activate_console, console: $console, type: $type";
     if ($type eq 'console') {
         # different handling for ssh consoles on s390x zVM
-        if (get_var('BACKEND', '') =~ /ipmi|s390x|spvm |pvm_hmc/ || get_var('S390_ZKVM')) {
+        if (get_var('BACKEND', '') =~ /ipmi|s390x|spvm|pvm_hmc/ || get_var('S390_ZKVM')) {
             diag 'backend ipmi || spvm || pvm_hmc || s390x || zkvm';
             $user ||= 'root';
             handle_password_prompt;
@@ -756,26 +754,34 @@ sub activate_console {
             # s390 zkvm uses a remote ssh session which is root by default so
             # search for that and su to user later if necessary
             push(@tags, 'text-logged-in-root') if get_var('S390_ZKVM');
+            push(@tags, 'wsl-linux-prompt')    if (get_var('FLAVOR') eq 'WSL');
             # Wait a bit to avoid false match on 'text-logged-in-$user', if tty has not switched yet,
             # or premature typing of credentials on sle15+
-            my $stilltime = is_sle('15+') ? 5 : 1;
+            my $stilltime = is_sle('15+') ? 6 : 1;
             wait_still_screen $stilltime;
             # we need to wait more than five seconds here to pass the idle timeout in
             # case the system is still booting (https://bugzilla.novell.com/show_bug.cgi?id=895602)
             # or when using remote consoles which can take some seconds, e.g.
             # just after ssh login
-            assert_screen \@tags, 60;
+            assert_screen \@tags, $args{timeout} // 60;
             if (match_has_tag("tty$nr-selected")) {
-                type_string "$user\n";
+                enter_cmd "$user";
                 handle_password_prompt;
             }
             elsif (match_has_tag('text-logged-in-root')) {
                 ensure_user($user);
             }
+            elsif (match_has_tag('wsl-linux-prompt')) {
+                return;
+            }
         }
-        assert_screen "text-logged-in-$user", 60;
-        $self->set_standard_prompt($user, skip_set_standard_prompt => $args{skip_set_standard_prompt});
-        assert_screen $console;
+        # For poo#81016, need enlarge wait time for aarch64.
+        my $waittime = check_var('ARCH', 'aarch64') ? 120 : 60;
+        assert_screen "text-logged-in-$user", $waittime;
+        unless ($args{skip_set_standard_prompt}) {
+            $self->set_standard_prompt($user, skip_set_standard_prompt => $args{skip_set_standard_prompt});
+            assert_screen $console;
+        }
     }
     elsif ($type =~ /^(virtio-terminal|sut-serial)$/) {
         serial_terminal::login($user, $self->{serial_term_prompt});
@@ -833,7 +839,7 @@ sub activate_console {
     }
     if (get_var('TUNNELED') && $name !~ /tunnel/) {
         die "Console '$console' activated in TUNNEL mode activated but tunnel(s) are not yet initialized, use the 'tunnel' console and call 'setup_ssh_tunnels' first" unless get_var('_SSH_TUNNELS_INITIALIZED');
-        (get_var('PUBLIC_CLOUD')) ? ssh_interactive_join() : $self->script_run('ssh -t sut', 0);
+        $self->script_run('ssh -t sut', 0);
         ensure_user($user) unless (get_var('PUBLIC_CLOUD'));
     }
     set_var('CONSOLE_JUST_ACTIVATED', 1);
@@ -841,7 +847,7 @@ sub activate_console {
 
 =head2 console_selected
 
-    console_selected($console [, await_console => $await_console] [, tags => $tags ] [, ignore => $ignore ]);
+    console_selected($console [, await_console => $await_console] [, tags => $tags ] [, ignore => $ignore ] [, timeout => $timeout ]);
 
 Overrides C<select_console> callback from C<testapi>. Waits for console by
 calling assert_screen on C<tags>, by default the name of the selected console.
@@ -854,10 +860,13 @@ test module specific.
 
 C<ignore> can be overridden to not check on certain consoles. By default the
 known uncheckable consoles are already ignored.
+
+C<timeout> is set on the internal C<assert_screen> call and can be set to
+configure a timeout value different than default.
 =cut
 sub console_selected {
     my ($self, $console, %args) = @_;
-    if ((exists $testapi::testapi_console_proxies{'root-ssh'}) && $console eq 'root-console') {
+    if ((exists $testapi::testapi_console_proxies{'root-ssh'}) && $console =~ m/^(root-console|install-shell|log-console)$/) {
         $console = 'root-ssh';
         my $ret = query_isotovideo('backend_select_console', {testapi_console => $console});
         die $ret->{error} if $ret->{error};
@@ -865,9 +874,10 @@ sub console_selected {
     }
     $args{await_console} //= 1;
     $args{tags}          //= $console;
-    $args{ignore}        //= qr{sut|root-virtio-terminal|root-sut-serial|iucvconn|svirt|root-ssh|hyperv-intermediary};
+    $args{ignore}        //= qr{sut|root-virtio-terminal|root-sut-serial|iucvconn|svirt|root-ssh|hyperv-intermediary|serial-ssh};
+    $args{timeout}       //= 30;
 
-    if ($args{tags} =~ $args{ignore} || !$args{await_console}) {
+    if ($args{tags} =~ $args{ignore} || !$args{await_console} || (get_var('FLAVOR') eq 'WSL')) {
         set_var('CONSOLE_JUST_ACTIVATED', 0);
         return;
     }
@@ -876,7 +886,11 @@ sub console_selected {
     # x11 needs special handling because we can not easily know if screen is
     # locked, display manager is waiting for login, etc.
     return ensure_unlocked_desktop if $args{tags} =~ /x11/;
-    assert_screen($args{tags}, no_wait => 1);
+    assert_screen($args{tags}, no_wait => 1, timeout => $args{timeout});
+    if (match_has_tag('workqueue_lockup')) {
+        record_soft_failure 'bsc#1126782';
+        send_key 'ret';
+    }
 }
 
 1;

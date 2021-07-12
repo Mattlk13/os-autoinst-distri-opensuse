@@ -38,29 +38,25 @@ sub run {
     # Install migration tool
     zypper_call 'in -y migrate-sles-to-sles4sap';
 
-    type_string "$cmd && touch /tmp/OK\n";
+    # Do the migration!
+    enter_cmd "$cmd && touch /tmp/OK";
     wait_serial 'Do you want to continue\?', timeout => 5;
-    type_string "y\n";
+    enter_cmd "y";
     wait_serial 'This script can use a local RMT or SMT', timeout => 5;
-    type_string "c\n";    # Use SCC for now, TODO: add support for SMT/RMT
+    enter_cmd "c";    # Use SCC for now, TODO: add support for SMT/RMT
     wait_serial "Please enter the email address to be used to register", timeout => 5;
-    type_string "\n";
+    send_key 'ret';
     wait_serial "Please enter your activation code", timeout => 5;
-    type_string "${regcode}\n";
+    enter_cmd "${regcode}";
     assert_script_run "ls /tmp/OK";
     zypper_call "in -y -t pattern sap_server";
+
+    # We have now a SLES4SAP product, so we need to notify the test(s)
+    set_var('SLE_PRODUCT', 'sles4sap');
 }
 
 sub test_flags {
     return {fatal => 1};
-}
-
-sub post_fail_hook {
-    my ($self) = @_;
-    $self->select_serial_terminal;
-    assert_script_run "save_y2logs /tmp/y2logs.tar.xz";
-    upload_logs "/tmp/y2logs.tar.xz";
-    $self->SUPER::post_fail_hook;
 }
 
 1;

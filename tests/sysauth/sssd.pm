@@ -1,13 +1,15 @@
 # SUSE's openQA tests
 #
 # Copyright © 2009-2013 Bernhard M. Wiedemann
-# Copyright © 2012-2019 SUSE LLC
+# Copyright © 2012-2021 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: sssd sssd-krb5 sssd-krb5-common sssd-ldap sssd-tools openldap2 openldap2-client
+# krb5 krb5-client krb5-server krb5-plugin-kdb-ldap python-pam python3-python-pam psmisc
 # Summary: Test the integration between SSSD and its various backends - file database, LDAP, and Kerberos
 # - If distro is sle >= 15, add Packagehub and sle-module-legacy products
 # - Install sssd, sssd-krb5, sssd-krb5-common, sssd-ldap, sssd-tools, openldap2,
@@ -29,21 +31,11 @@ use warnings;
 
 use testapi;
 use utils 'zypper_call';
-use Utils::Systemd 'disable_and_stop_service';
 use version_utils qw(is_sle is_opensuse);
-use registration "add_suseconnect_product";
 
 sub run {
     my ($self) = @_;
     $self->select_serial_terminal;
-
-    if (is_sle) {
-        assert_script_run 'source /etc/os-release';
-        if (is_sle '>=15') {
-            add_suseconnect_product('PackageHub', undef, undef, undef, 300, 1);
-            add_suseconnect_product('sle-module-legacy');
-        }
-    }
 
     # Install test subjects and test scripts
     my @test_subjects = qw(
@@ -53,14 +45,22 @@ sub run {
     );
 
     # for sle 12 we still use and support python2
-    push @test_subjects, 'python-pam'         if is_sle('<15');
-    push @test_subjects, 'python3-python-pam' if is_sle('15+') || is_opensuse;
-
-    if (check_var('DESKTOP', 'textmode')) {    # sssd test suite depends on killall, which is part of psmisc (enhanced_base pattern)
-        zypper_call "in psmisc";
+    if (is_sle('<15')) {
+        push @test_subjects, 'python-pam';
+    } else {
+        push @test_subjects, 'python3-python-pam';
     }
-    zypper_call "refresh";
-    zypper_call "in @test_subjects";
+    # sssd test suite depends on killall, which is part of psmisc (enhanced_base pattern)
+    push @test_subjects, 'psmisc' if check_var('DESKTOP', 'textmode');
+
+    my $ret = zypper_call "refresh", exitcode => [0, 4];
+    if ($ret == 4) {
+        record_soft_failure 'bsc#1152524 - [Build 18.1] openQA test fails whenever package hub repo is added: Valid metadata not found at specified URL';
+    }
+    $ret = zypper_call "in @test_subjects", exitcode => [0, 106];
+    if ($ret == 106) {
+        record_soft_failure 'bsc#1152524 - [Build 18.1] openQA test fails whenever package hub repo is added: Valid metadata not found at specified URL';
+    }
     assert_script_run "cd; curl -L -v " . autoinst_url . "/data/lib/version_utils.sh > /usr/local/bin/version_utils.sh";
     assert_script_run "cd; curl -L -v " . autoinst_url . "/data/sssd-tests > sssd-tests.data && cpio -id < sssd-tests.data && mv data sssd && ls sssd";
 
@@ -90,6 +90,11 @@ sub run {
     if (@scenario_failures) {
         die "Some test scenarios failed: @scenario_failures";
     }
+}
+
+sub post_fail_hook {
+    select_console 'log-console';
+    shift->export_logs_basic;
 }
 
 1;

@@ -1,12 +1,13 @@
 # SUSE's openssh tests
 #
-# Copyright © 2016-2018 SUSE LLC
+# Copyright © 2016-2020 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: openssh
 # Summary: Add openssh test cases for FIPS testing
 #    Test Case 1525228: FIPS: openssh
 #
@@ -18,7 +19,9 @@
 #    openssh will refuse to work with any non-approved
 #    algorithm in fips mode, just like blowfish cipher
 #    or MD5 hash.
+#
 # Maintainer: Ben Chou <bchou@suse.com>
+# Tags: poo#65375
 
 use base "consoletest";
 use strict;
@@ -40,13 +43,17 @@ sub run {
     # Copy public key to target user's ~/.ssh/authorized_keys
     script_run("ssh-keygen -R localhost; ssh-copy-id -i ~/.ssh/id_rsa.pub $ssh_testman\@localhost", 0);
     assert_screen "ssh-login", 60;
-    type_string "yes\n";
+    enter_cmd "yes";
     assert_screen 'password-prompt';
-    type_string "$ssh_testman_passwd\n";
+    enter_cmd "$ssh_testman_passwd";
 
     # Verify ssh without password
     script_run("ssh -v $ssh_testman\@localhost -t echo LOGIN_SUCCESSFUL", 0);
     assert_screen "ssh-login-ok";
+}
+
+sub test_flags {
+    return {milestone => 1, fatal => 1};
 }
 
 1;

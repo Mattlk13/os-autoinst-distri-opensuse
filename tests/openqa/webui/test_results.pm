@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright © 2018-2019 SUSE LLC
+# Copyright © 2018-2020 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -14,6 +14,9 @@ use strict;
 use warnings;
 use base "x11test";
 use testapi;
+
+
+my $tutorial_disabled;
 
 sub upload_autoinst_log {
     assert_script_run 'openqa-client jobs/1/cancel post';
@@ -31,35 +34,25 @@ sub upload_autoinst_log {
     }
 }
 
-sub run {
-    # get rid of that horrible tutorial box
-    wait_still_screen;
-    assert_and_click 'openqa-dont-notify-me';
+sub handle_notify_popup {
+    assert_screen 'openqa-dont-notify-me';
+    for my $i (1 .. 5) {
+        assert_and_click 'openqa-dont-notify-me';
+        if (check_screen('openqa-tutorial-confirm', 15)) {
+            last;
+        }
+    }
     assert_and_click 'openqa-tutorial-confirm';
     assert_screen 'openqa-tutorial-closed';
-    wait_still_screen;
+}
 
-    # while job not finished
-    for (1 .. 5) {
-        send_key 'pgup';
-        assert_and_click 'openqa-tests';
-        wait_still_screen;
-        last if check_screen 'openqa-job-minimalx', 2;
-        send_key 'pgdn';
-        last if check_screen 'openqa-job-minimalx', 2;
-    }
+sub run {
+    handle_notify_popup;
+    assert_screen 'openqa-tests';
+    assert_and_click 'openqa-tests';
     assert_and_click 'openqa-job-minimalx';
-
-    # Do not hit 'f5' too early
-    wait_still_screen;
-
-    # wait for result
-    for (1 .. 25) {
-        send_key 'f5';
-        wait_still_screen;
-        last if check_screen('openqa-testresult', 60);
-    }
-    assert_screen 'openqa-testresult';
+    assert_and_click 'openqa-job-details';
+    assert_screen 'openqa-testresult', 600;
 }
 
 sub test_flags {

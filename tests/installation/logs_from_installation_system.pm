@@ -18,7 +18,7 @@
 #   - Get /etc/resolv.conf contents
 #   - Save screenshot
 # - Upload yast2 installation network logs
-# Maintainer: Oliver Kurz <okurz@suse.de>
+# Maintainer: QA SLE YaST team <qa-sle-yast@suse.de>
 
 use base 'y2_installbase';
 use strict;
@@ -43,13 +43,13 @@ sub run {
     }
     # while technically SUT has a different network than the BMC
     # we require ssh installation anyway
-    if (get_var('BACKEND', '') =~ /ipmi|spvm|pvm_hmc/) {
+    if (get_var('BACKEND', '') =~ /ipmi|spvm/) {
         use_ssh_serial_console;
         # set serial console for xen
-        set_serial_console_on_vh('/mnt', '', 'xen') if (get_var('XEN')                      || check_var('HOST_HYPERVISOR', 'xen'));
-        set_serial_console_on_vh('/mnt', '', 'kvm') if (check_var('HOST_HYPERVISOR', 'kvm') || check_var('SYSTEM_ROLE',     'kvm'));
-        set_dom0_mem('/mnt')    if (get_var('REGRESSION') && (get_var('XEN') || check_var('HOST_HYPERVISOR', 'xen')));
-        set_pxe_efiboot('/mnt') if check_var('ARCH', 'aarch64');
+        set_serial_console_on_vh('/mnt', '', 'xen') if (get_var('XEN') || check_var('HOST_HYPERVISOR', 'xen'));
+        set_serial_console_on_vh('/mnt', '', 'kvm') if (check_var('HOST_HYPERVISOR', 'kvm') || check_var('SYSTEM_ROLE', 'kvm'));
+        adjust_for_ipmi_xen('/mnt')                 if (get_var('REGRESSION') && (get_var('XEN') || check_var('HOST_HYPERVISOR', 'xen')));
+        set_pxe_efiboot('/mnt')                     if check_var('ARCH', 'aarch64');
     }
     else {
         # avoid known issue in FIPS mode: bsc#985969

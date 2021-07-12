@@ -8,6 +8,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: MozillaFirefox
 # Summary: Test audio playback in firefox
 #  Depending on if firefox has been started in before firefox might behave
 #  different but should always show the play controls which the test is
@@ -16,7 +17,7 @@
 # - Start firefox opening file "1d5d9dD.oga" from datadir
 # - Check recorded sound
 # - Exit firefox
-# Maintainer: Oliver Kurz <okurz@suse.de>
+# Maintainer: QE Core <qe-core@suse.de>
 
 use base "x11test";
 use strict;
@@ -25,6 +26,7 @@ use testapi;
 
 sub run {
     my ($self) = @_;
+    select_console 'x11';
     start_audiocapture;
     x11_start_program('firefox ' . data_url('1d5d9dD.oga'), target_match => [qw(command-not-found test-firefox_audio-1)], match_timeout => 90);
     #  re-try for typing issue, see https://progress.opensuse.org/issues/54401

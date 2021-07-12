@@ -8,11 +8,12 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: wget
 # Summary: Test curl fallback from IPv6 to IPv4
 # - Install wget
 # - Test that wget is installed
 # - Download a file and display its contents
-# Maintainer: Oliver Kurz <okurz@suse.de>
+# Maintainer: QE Core <qe-core@suse.de>
 # Tags: bsc#598574
 
 use base "consoletest";

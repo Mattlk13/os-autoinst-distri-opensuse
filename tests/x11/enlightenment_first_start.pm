@@ -7,6 +7,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: enlightenment
 # Summary: Other Desktop Environments: Enlightenment
 # Maintainer: Dominique Leuenberger <dimstar@opensuse.org>
 
@@ -15,6 +16,7 @@ use strict;
 use warnings;
 use testapi;
 use utils;
+use Utils::Architectures 'is_aarch64';
 
 sub run {
     mouse_hide();
@@ -32,19 +34,18 @@ sub run {
     assert_and_click "enlightenment_assistant_next";
     assert_screen "enlightenment_windowfocus";
     assert_and_click "enlightenment_assistant_next";
-    assert_screen "enlightenment_keybindings";
-    assert_and_click "enlightenment_assistant_next";
-    assert_screen [qw(enlightenment_compositing enlightenment_bluez_not_found)];
+    assert_screen [qw(enlightenment_keybindings enlightenment_bluez_not_found)];
+    if (match_has_tag 'enlightenment_keybindings') {
+        assert_and_click "enlightenment_assistant_next";
+        assert_screen [qw(enlightenment_compositing enlightenment_bluez_not_found)];
+    }
     if (match_has_tag 'enlightenment_bluez_not_found') {
         assert_and_click 'enlightenment_assistant_next';
         assert_screen 'enlightenment_compositing';
     }
     assert_and_click "enlightenment_assistant_next";
-    assert_screen [qw(enlightenment_generic_desktop enlightenment_acpid_missing)];
-    if (match_has_tag 'enlightenment_acpid_missing') {
-        assert_and_click 'enlightenment_acpid_missing';
-        assert_screen 'enlightenment_generic_desktop';
-    }
+    assert_and_click 'enlightenment_acpid_missing' if (get_required_var('ARCH') =~ /86/ || is_aarch64);
+    assert_screen 'enlightenment_generic_desktop';
 }
 
 sub test_flags {

@@ -1,12 +1,13 @@
 # SUSE's openQA tests
 #
-# Copyright © 2017-2019 SUSE LLC
+# Copyright © 2017-2021 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
-
+#
+# Package: clamav
 # Summary: check freshclam and clamscan against some fake virus samples
 # - refresh the database using freshclam
 # - change user vscan to root in clamd.conf (clamd runs as root)
@@ -14,15 +15,16 @@
 # - check that clamscan is able to recognize a fake vim virus
 # - check that clamscan is able to recognize an EICAR virus pdf, txt and zip format
 # - check that clamdscan is able to recognize an EICAR virus pdf, txt and zip format
+#
 # Maintainer: Ben Chou <bchou@suse.com>
-# Tags: TC1595169, poo#46880
+# Tags: TC1595169, poo#46880, poo#65375, poo#80182
 
 use base "consoletest";
 use strict;
 use warnings;
 use testapi;
 use utils;
-use version_utils qw(is_jeos is_opensuse);
+use version_utils qw(is_jeos is_opensuse is_sle);
 
 sub scan_and_parse {
     my $re       = 'm/(eicar_test_files\/eicar.(pdf|txt|zip): Eicar-Test-Signature FOUND\n)+(\n.*)+Infected files: 3(\n.*)+/';
@@ -35,10 +37,28 @@ sub scan_and_parse {
 }
 
 sub run {
-    select_console 'root-console';
-    zypper_call('in clamav');
-    # Initialize and download ClamAV database which needs time
-    assert_script_run('freshclam', 700);
+    my $self = shift;
+    $self->select_serial_terminal;
+
+    zypper_call('in clamav vim');
+    zypper_call('info clamav');
+
+    # Check Clamav version
+    # Jira ID SLE-16780: upgrade Clamav SLE
+    my $current_ver = script_output("rpm -q --qf '%{version}' clamav");
+    record_info("Clamav_ver", "Current Clamav package version: $current_ver");
+
+    if (is_sle('>=15-SP3') && ($current_ver < 0.101)) {
+        record_soft_failure("jsc#SLE-16780: upgrade Clamav SLE feature is not yet released");
+    }
+
+    # Initialize and download ClamAV database
+    # First from local mirror, it's much faster, then from official clamav db
+    my $host = is_sle ? 'openqa.suse.de' : 'openqa.opensuse.org';
+    assert_script_run("sed -i '/mirror1/i PrivateMirror $host/assets/repo/cvd' /etc/freshclam.conf");
+    assert_script_run('freshclam');
+    assert_script_run("sed -i '/PrivateMirror $host/d' /etc/freshclam.conf");
+    assert_script_run('freshclam');
 
     # clamd takes a lot of memory at startup so a swap partition is needed on JeOS
     # But openSUSE aarch64 JeOS has already a swap and BTRFS does not support swapfile
@@ -54,7 +74,8 @@ sub run {
     # Verify the database
     assert_script_run 'sigtool -i /var/lib/clamav/main.cvd';
     assert_script_run 'sigtool -i /var/lib/clamav/bytecode.cvd';
-    assert_script_run 'sigtool -i /var/lib/clamav/daily.cvd';
+    # CLD files are uncompressed and unsigned versions of the CVD that have had CDIFFs applied
+    assert_script_run 'sigtool -i /var/lib/clamav/daily.cvd || sigtool -i /var/lib/clamav/daily.cld';
 
     # Clamd start timeout sometimes. The default systemd timeout is 90s,
     # override it with a longer duration in runtime.
@@ -73,7 +94,7 @@ sub run {
     # signature to viruses database, then scan the virus
     for my $alg (qw(md5 sha1 sha256)) {
         assert_script_run "sigtool --$alg /usr/bin/vim > test.hdb";
-        type_string "clamscan -d test.hdb  /usr/bin/vim | tee /dev/$serialdev\n";
+        enter_cmd "clamscan -d test.hdb  /usr/bin/vim | tee /dev/$serialdev";
         die "Virus scan result was not expected" unless (wait_serial qr/vim\.UNOFFICIAL FOUND.*Known viruses: 1/ms);
     }
 
@@ -91,10 +112,17 @@ sub run {
     # Clean up
     script_run "rm -f test.hdb";
     script_run "rm -rf eicar_test_files/";
+    systemctl('stop clamd freshclam');
 }
 
 sub post_run_hook {
     assert_script_run("swapoff /var/lib/swap/swapfile") if is_jeos && !(is_opensuse && check_var('ARCH', 'aarch64'));
+    systemctl('stop clamd', timeout => 500);
+    systemctl('stop freshclam');
+}
+
+sub test_flags {
+    return {fatal => 0};
 }
 
 1;

@@ -19,6 +19,8 @@ use warnings;
 use testapi;
 use migration;
 use version_utils 'is_sle';
+use Utils::Backends 'is_pvm';
+use utils;
 
 sub run {
     # After being patched, original system is ready for upgrade
@@ -41,15 +43,18 @@ sub run {
     }
 
     # Only 11-SP4 need set username, 11-SP4+ don't need set username
-    set_var('DM_NEEDS_USERNAME', '0') if (is_sle('=11-SP4', get_var('HDDVERSION')) && check_var('DM_NEEDS_USERNAME', '1'));
-
-    # Setup DM_NEEDS_USERNAME for SLE15 KDE migration case
-    # In SLES15 KDE has been drop, after migration the default desktop is XDM
-    # KDE has moved to Package Hub, it will stay install with SLES15 if added PackageHub
-    set_var('DM_NEEDS_USERNAME', '1') if (check_var('DESKTOP', 'KDE') && is_sle('15+') && (get_var('ADDONURL', '') !~ /phub/));
+    # Reset DESKTOP after upgrade as desktop change
+    if (is_sle('=11-SP4', get_var('HDDVERSION')) && check_var('DM_NEEDS_USERNAME', '1')) {
+        set_var('DM_NEEDS_USERNAME', '0');
+        set_var('DESKTOP',           'gnome') if (check_var('DESKTOP', 'kde') && (get_var('ADDONURL', '') !~ /phub/));
+    }
 
     record_info('Version', 'VERSION=' . get_var('VERSION'));
-    reset_consoles_tty;
+    if (is_pvm) {
+        reconnect_mgmt_console;
+    } else {
+        reset_consoles_tty;
+    }
 }
 
 1;

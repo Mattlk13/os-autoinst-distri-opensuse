@@ -3,20 +3,17 @@ use warnings;
 use Test::More;
 use Test::Exception;
 use Test::Warnings;
-use FindBin;
-use YAML::Tiny;
+use YAML::PP;
 use File::Basename;
 
-# This is required to be able to read
-# packages in distri's lib/ folder.
-# Alternatively it can be supplied as -I option
-# while running prove.
-use lib ("$FindBin::Bin/lib", "$FindBin::Bin/../lib");
+my $include = YAML::PP::Schema::Include->new(paths => (dirname(__FILE__) . '/../'));
+my $ypp     = YAML::PP->new(schema => ['Core', $include, 'Merge']);
+$include->yp($ypp);
 
 subtest 'parse_yaml_test_data_single_import' => sub {
     use scheduler;
     # compare versions if possible
-    my $schedule = YAML::Tiny::LoadFile(dirname(__FILE__) . '/data/test_schedule_single_import.yaml');
+    my $schedule = $ypp->load_file(dirname(__FILE__) . '/data/test_schedule_single_import.yaml');
     scheduler::parse_test_suite_data($schedule);
     my $testdata = scheduler::get_test_suite_data();
     ok $testdata->{test_in_yaml_schedule} eq 'test_in_yaml_schedule_value', "Value from schedule file was overwritten by yaml import";
@@ -24,10 +21,29 @@ subtest 'parse_yaml_test_data_single_import' => sub {
 
 };
 
+subtest 'parse_yaml_test_data_vars_expansion' => sub {
+    use scheduler;
+    use testapi 'set_var';
+
+    set_var('ENV_VAR_1', 'aaa');
+    set_var('ENV_VAR_2', 'bbb');
+    set_var('ENV_VAR_3', 'ccc');
+    set_var('ENV_VAR_4', 'ddd');
+    my $schedule = $ypp->load_file(dirname(__FILE__) . '/data/test_data_vars_expansion.yaml');
+    scheduler::parse_test_suite_data($schedule);
+    my $testdata = scheduler::get_test_suite_data();
+    ok $testdata->{var1} eq 'pre-aaa-post', 'Test data expanded properly for hash';
+    ok $testdata->{nested1}->[0]->{nested2}->{var2} eq 'bbb-post', 'Test data expanded properly for nested hash';
+    ok $testdata->{nested1}->[1] eq 'pre-ccc', 'Test data expanded properly for array';
+    ok $testdata->{nested1}->[2]->{var4} eq 'ddd', 'Test data expanded properly for hash in array';
+    ok $testdata->{nested1}->[3] eq '', 'Non-existing variable expanded as empty in test data for array';
+    ok $testdata->{no_var} eq '', 'Non-existing variable expanded as empty string in test data for hash';
+};
+
 subtest 'parse_yaml_test_data_multiple_imports' => sub {
     use scheduler;
     # compare versions if possible
-    my $schedule = YAML::Tiny::LoadFile(dirname(__FILE__) . '/data/test_schedule_multi_imports.yaml');
+    my $schedule = $ypp->load_file(dirname(__FILE__) . '/data/test_schedule_multi_imports.yaml');
     scheduler::parse_test_suite_data($schedule);
     my $testdata = scheduler::get_test_suite_data();
     ok $testdata->{test_in_yaml_schedule} eq 'test_in_yaml_schedule_value', "Value from schedule file was overwritten by yaml import";
@@ -36,22 +52,39 @@ subtest 'parse_yaml_test_data_multiple_imports' => sub {
 
 };
 
-subtest 'do_not_allow_nested_imports' => sub {
-    my $schedule = YAML::Tiny::LoadFile(dirname(__FILE__) . '/data/test_schedule_nested_import.yaml');
-    dies_ok { scheduler::parse_test_suite_data($schedule) } "Error: test_data can only be defined in a dedicated file for data\n";
-};
-
 subtest 'parse_yaml_test_data_using_yaml_data_setting' => sub {
     use scheduler;
     use testapi 'set_var';
 
     set_var('YAML_TEST_DATA', 't/data/test_data_yaml_data_setting.yaml');
     # compare versions if possible
-    my $schedule = YAML::Tiny::LoadFile(dirname(__FILE__) . '/data/test_schedule_yaml_data_setting.yaml');
+    my $schedule = $ypp->load_file(dirname(__FILE__) . '/data/test_schedule_yaml_data_setting.yaml');
     scheduler::parse_test_suite_data($schedule);
     my $testdata = scheduler::get_test_suite_data();
     ok $testdata->{test_in_yaml_data} eq 'test_in_yaml_data',               "Value from data file was overwritten by value from schedule or other imports";
     ok $testdata->{test_in_yaml_import_3} eq 'test_in_yaml_import_value_3', "Value in data file was overwritten by value in schedule file";
+};
+
+subtest 'parse_yaml_test_schedule_recursive_conditional' => sub {
+    use scheduler;
+    use testapi 'set_var';
+
+    my $schedule = $ypp->load_file(dirname(__FILE__) . '/data/test_schedule_recursive_conditional.yaml');
+    my @modules;
+    @modules = scheduler::parse_schedule($schedule);
+    ok $modules[0] eq 'bar/test0', "Basic scheduling";
+    ok $modules[1] eq 'bar/test3', "Basic scheduling";
+    set_var('VAR1', 'foo');
+    @modules = scheduler::parse_schedule($schedule);
+    ok $modules[0] eq 'bar/test0', "Basic scheduling";
+    ok $modules[1] eq 'foo/test1', "Conditional scheduling";
+    ok $modules[2] eq 'bar/test3', "Basic scheduling";
+    set_var('VAR2', 'foo');
+    @modules = scheduler::parse_schedule($schedule);
+    ok $modules[0] eq 'bar/test0', "Basic scheduling";
+    ok $modules[1] eq 'foo/test1', "Conditional scheduling";
+    ok $modules[2] eq 'foo/test2', "Recursive conditional scheduling";
+    ok $modules[3] eq 'bar/test3', "Basic scheduling";
 };
 
 done_testing;

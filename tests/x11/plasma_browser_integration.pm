@@ -8,6 +8,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: plasma-browser-integration MozillaFirefox
 # Summary: Test plasma-browser-integration in firefox
 # Maintainer: Fabian Vogt <fvogt@suse.de>
 
@@ -33,9 +34,9 @@ sub run {
     $self->firefox_check_popups();
 
     # Click on the reminder, it might take a while to appear
-    assert_and_click('plasma-browser-integration-reminder', 30);
+    assert_and_click('plasma-browser-integration-reminder');
     # Click "Add to Firefox". Longer timeout as loading can take a while
-    assert_and_click('plasma-browser-integration-install', 180);
+    assert_and_click('plasma-browser-integration-install', timeout => 180);
     # Confirm installation
     assert_and_click('plasma-browser-integration-install-confirm');
     # Ack the "has been added" popup
@@ -54,9 +55,13 @@ sub run {
         last if check_screen('plasma-mpris-pause', 20);
     }
 
-    # Pause using the button in the applet
-    assert_and_click('plasma-mpris-pause');
-    # Verify that the applet noticed that
+    $counter = 3;
+    while ($counter-- > 0) {
+        # Pause using the button in the applet
+        assert_and_click('plasma-mpris-pause');
+        # Verify that the applet noticed that
+        last if check_screen('plasma-mpris-paused', 5);
+    }
     assert_screen('plasma-mpris-paused');
     # Verify that the video is paused and unpause it
     assert_and_click('plasma-browser-integration-video-unpause');

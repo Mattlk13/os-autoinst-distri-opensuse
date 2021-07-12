@@ -9,7 +9,7 @@ use Exporter 'import';
 use strict;
 use warnings;
 use testapi;
-use utils qw(systemctl zypper_call);
+use utils qw(zypper_call common_service_action);
 use version_utils qw(is_sle is_jeos);
 
 our @EXPORT = qw(setup_autofs_server check_autofs_service
@@ -21,7 +21,8 @@ my $autofs_map_file        = '/etc/auto.master.d/autofs_regression_test.autofs';
 my $test_conf_file         = '/etc/auto.iso';
 my $test_mount_dir         = '/mnt/test_autofs_local';
 my $file_to_mount          = '/tmp/test-iso.iso';
-my $test_conf_file_content = "echo  iso     -fstype=auto,ro         :$file_to_mount > $test_conf_file";
+my $test_conf_file_content = "iso -fstype=auto,ro :$file_to_mount";
+my $service_type           = 'Systemd';
 
 =head2 setup_autofs_server
 
@@ -34,10 +35,13 @@ sub setup_autofs_server {
     my (%args) = @_;
     my $grep_output = script_output("grep '#+dir' $args{autofs_conf_file}");
     if ($grep_output =~ /\#\+dir/) {
-        assert_script_run("sed -i_bk 's:#+dir\\:/etc/auto\\.master\\.d:+dir\\:/etc/auto\\.master\\.d:' $args{autofs_conf_file}");
+        assert_script_run(q{sed -i_bk 's|#\(+dir:/etc/auto\.master\.d\)|\1|' } . $args{autofs_conf_file});
+        assert_script_run("grep '+dir:/etc/auto.master.d' $args{autofs_conf_file}");
     }
     assert_script_run("echo $args{test_mount_dir} $args{test_conf_file} > $args{autofs_map_file}");
-    assert_script_run($args{test_conf_file_content}, fail_message => "File $args{test_conf_file} could not be created");
+    assert_script_run("grep '$args{test_conf_file}' $args{autofs_map_file}");
+    assert_script_run("echo $args{test_conf_file_content} > $args{test_conf_file}", fail_message => "File $args{test_conf_file} could not be created");
+    assert_script_run("grep '$args{test_conf_file_content}' $args{test_conf_file}");
 }
 
 =head2 check_autofs_service
@@ -48,12 +52,11 @@ Check autofs service by starting and stopping service
 
 =cut
 sub check_autofs_service {
-    systemctl 'start autofs';
-    systemctl 'is-active autofs';
-    systemctl 'stop autofs';
-    systemctl 'is-active autofs', expect_false => 1;
-    systemctl 'restart autofs';
-    systemctl 'is-active autofs';
+    common_service_action 'autofs', $service_type, 'start';
+    common_service_action 'autofs', $service_type, 'is-active';
+    common_service_action 'autofs', $service_type, 'stop';
+    common_service_action 'autofs', $service_type, 'restart';
+    common_service_action 'autofs', $service_type, 'is-active';
 }
 
 =head2 install_service
@@ -73,7 +76,7 @@ sub install_service {
 Enable service autofs
 =cut
 sub enable_service {
-    systemctl 'enable autofs';
+    common_service_action 'autofs', $service_type, 'enable';
 }
 
 =head2 start_service
@@ -83,7 +86,7 @@ sub enable_service {
 Start service autofs
 =cut
 sub start_service {
-    systemctl 'start autofs';
+    common_service_action 'autofs', $service_type, 'start';
 }
 
 =head2 check_service
@@ -93,8 +96,8 @@ sub start_service {
 Check service autofs
 =cut
 sub check_service {
-    systemctl 'is-enabled autofs.service';
-    systemctl 'is-active autofs';
+    common_service_action 'autofs', $service_type, 'is-enabled';
+    common_service_action 'autofs', $service_type, 'is-active';
 }
 
 =head2 configure_service
@@ -110,7 +113,8 @@ Also C<check_autofs_service()> will be called.
 sub configure_service {
     my ($stage) = @_;
     $stage //= '';
-
+    # We don't check autofs function for sles11sp4
+    return if ($service_type eq 'SystemV');
     # mkisofs is not distributed in JeOS based on sle12
     my $mk_iso_tool = (is_jeos and is_sle('<15')) ? 'genisoimage' : 'mkisofs';
 
@@ -131,7 +135,7 @@ sub configure_service {
         test_conf_file_content => $test_conf_file_content,
         test_mount_dir         => $test_mount_dir);
 
-    systemctl 'restart autofs';
+    common_service_action 'autofs', $service_type, 'restart';
 }
 
 =head2 check_function
@@ -141,6 +145,9 @@ sub configure_service {
 Check iso which is mounted to test directory
 =cut
 sub check_function {
+    # We don't check autofs function for sles11sp4
+    return if ($service_type eq 'SystemV');
+
     assert_script_run("ls $test_mount_dir/iso");
 
     my $mount_output_triggered = script_output("mount | grep -e $file_to_mount");
@@ -156,7 +163,7 @@ Save files into C<$autofs_conf_file>, restart autofs and clean up files
 # clean up
 sub do_cleanup {
     assert_script_run("sed -i_bk 's:+dir\\:/etc/auto\\.master\\.d:#+dir\\:/etc/auto\\.master\\.d:' $autofs_conf_file");
-    systemctl 'restart autofs';
+    common_service_action 'autofs', $service_type, 'restart';
 
     assert_script_run("ls -la $test_mount_dir");
     assert_script_run("rm -fr $test_mount_dir/README");
@@ -189,8 +196,9 @@ Run checks of autofs by call following functions:
 
 =cut
 sub full_autofs_check {
-    my ($stage) = @_;
-    $stage //= '';
+    my (%hash) = @_;
+    my ($stage, $type) = ($hash{stage}, $hash{service_type});
+    $service_type = $type;
 
     select_console 'root-console';
 
@@ -204,6 +212,7 @@ sub full_autofs_check {
     }
     else {
         check_service();
+        return (get_var('ORIGIN_SYSTEM_VERSION') eq '11-SP4');
         check_function();
         do_cleanup();
     }

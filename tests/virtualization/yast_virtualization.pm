@@ -1,12 +1,13 @@
 # SUSE's openQA tests
 #
-# Copyright © 2016-2019 SUSE LLC
+# Copyright © 2016-2021 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: yast2-vm
 # Summary: Add virtualization hypervisor components to an installed system
 # Maintainer: aginies <aginies@suse.com>
 
@@ -17,16 +18,15 @@ use testapi;
 use utils;
 
 sub run {
-    my ($self) = @_;
     x11_start_program('xterm');
     send_key 'alt-f10';
     become_root;
-    pkcon_quit;
-    if (script_run('zypper se -i yast2-vm') == 104) {
+    quit_packagekit;
+    if (zypper_call('se yast2-vm', exitcode => [0, 104]) == 104) {
         record_soft_failure 'bsc#1083398 - YaST2-virtualization provides wrong components for SLED';
         zypper_call 'in yast2-vm';
     }
-    $self->launch_yast2_module_x11('virtualization');
+    y2_module_guitest::launch_yast2_module_x11('virtualization');
     # select everything
     if (check_var('ARCH', 'x86_64')) {
         send_key 'alt-x';    # XEN Server, only available on x86_64: bsc#1088175
@@ -38,7 +38,7 @@ sub run {
 
     # launch the installation
     send_key 'alt-a';
-    assert_screen([qw(yast_virtualization_installed yast_virtualization_bridge)], 600);
+    assert_screen([qw(yast_virtualization_installed yast_virtualization_bridge)], 800);
     if (match_has_tag('yast_virtualization_bridge')) {
         # select yes
         send_key 'alt-y';

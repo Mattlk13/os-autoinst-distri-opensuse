@@ -16,7 +16,7 @@
 #
 #    When the variable ENCRYPTED_ACTIVATE_EXISTING is set it will enter the
 #    password for the existing volume to activate it.
-# Maintainer: Oliver Kurz <okurz@suse.de>
+# Maintainer: QA SLE YaST team <qa-sle-yast@suse.de>
 
 use base 'y2_installbase';
 use strict;
@@ -28,7 +28,7 @@ my $after_cancel_tags = [
     qw(
       enable-multipath scc-registration
       inst-instmode addon-products
-      )];
+    )];
 
 sub run {
     assert_screen 'encrypted_volume_activation_prompt';

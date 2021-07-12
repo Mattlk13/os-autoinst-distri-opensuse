@@ -15,10 +15,10 @@ use base 'y2_installbase';
 use strict;
 use warnings;
 use testapi;
-use version_utils qw(is_sle is_caasp);
+use version_utils qw(is_sle is_microos);
 
 sub run {
-    return if is_caasp();
+    return if is_microos();
     assert_screen('release-notes-button', 60);
 
     # workaround for bsc#1014178
@@ -53,7 +53,7 @@ sub run {
     }
     wait_still_screen(2);
     if (check_var('VIDEOMODE', 'text')) {
-        send_key 'tab';          # select tab area
+        send_key 'tab';    # select tab area
     }
 
     # no release-notes for WE and all modules

@@ -1,19 +1,22 @@
 # SUSE's openQA tests
 #
-# Copyright © 2017 SUSE LLC
+# Copyright © 2017-2020 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: zypper
 # Summary: SAP Pattern test
+# Working both on plain SLE and SLES4SAP products
 # Maintainer: Alvaro Carvajal <acarvajal@suse.de>
 
 use base "sles4sap";
 use testapi;
 use utils;
 use version_utils qw(is_sle is_upgrade);
+use main_common 'is_updates_tests';
 use strict;
 use warnings;
 
@@ -25,7 +28,7 @@ sub run {
     $self->select_serial_terminal;
 
     # Disable packagekit
-    pkcon_quit;
+    quit_packagekit;
 
     # Is HA pattern needed?
     push @sappatterns, 'ha_sles' if get_var('HA_CLUSTER');
@@ -41,27 +44,34 @@ sub run {
         # use of the 'textmode' system role during install, or on upgrades when the
         # original system didn't have the pattern (for example, from SLES4SAP 11-SP4)
         die "Pattern sap_server not installed by default"
-          unless (check_var('SYSTEM_ROLE', 'textmode') or is_upgrade());
-        record_info('install sap_server', 'Installing sap_server pattern and starting tuned');
+          unless (check_var('SYSTEM_ROLE', 'textmode') or is_upgrade() or is_updates_tests() or check_var('SLE_PRODUCT', 'sles'));
+        record_info('install sap_server', 'Installing sap_server pattern');
         zypper_call('in -y -t pattern sap_server');
-        systemctl 'start tuned';
     }
 
-    # Dry run of each pattern's installation before actual installation
-    foreach my $pattern (@sappatterns) {
-        zypper_call("in -D -y -t pattern $pattern");
-        $output = script_output("zypper info --requires $pattern");
-        record_info("requirements pattern: $pattern", $output);
-    }
+    # This test is also used for testing SAP products installation on plain SLE
+    # All SAP patterns are not available in SLE
+    if (check_var('SLE_PRODUCT', 'sles4sap')) {
+        # Dry run of each pattern's installation before actual installation
+        foreach my $pattern (@sappatterns) {
+            zypper_call("in -D -y -t pattern $pattern");
+            $output = script_output("zypper info --requires $pattern");
+            record_info("requirements pattern: $pattern", $output);
+        }
 
-    # Actual installation and verification
-    foreach my $pattern (@sappatterns) {
-        zypper_call("in -y -t pattern $pattern");
-        $output = script_output "zypper info -t pattern $pattern";
-        # Name of HA pattern is weird...
-        $pattern = "ha-$pattern" if ($pattern =~ /ha_sles/) && get_var('HA_CLUSTER');
-        die "SAP zypper pattern [$pattern] info check failed"
-          unless ($output =~ /i.?\s+\|\spatterns-$pattern\s+\|\spackage\s\|\sRequired/);
+        # Actual installation and verification
+        foreach my $pattern (@sappatterns) {
+            zypper_call("in -y -t pattern $pattern", timeout => 1500);
+            $output = script_output "zypper info -t pattern $pattern";
+            # Name of HA pattern is weird...
+            $pattern = "ha-$pattern" if ($pattern =~ /ha_sles/) && get_var('HA_CLUSTER');
+            die "SAP zypper pattern [$pattern] info check failed"
+              unless ($output =~ /i.?\s+\|\spatterns-$pattern\s+\|\spackage\s\|\sRequired/);
+        }
+    }
+    elsif (check_var('SLE_PRODUCT', 'sles') && get_var('HANA')) {
+        # We need this package for installing HANA on SLE
+        zypper_call 'in libatomic1';
     }
 
     # Some specific package may be needed in HA mode

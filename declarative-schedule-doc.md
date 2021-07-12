@@ -9,6 +9,7 @@
 		- [conditional_schedule](#conditional_schedule)
 		- [schedule](#schedule)
 		- [test_data](#test_data)
+        - [importing](#importing)
 	- [2. Enable scheduler in settings](#2-enable-scheduler-in-settings)
 	- [3. Enable scheduler in main file](#3-enable-scheduler-in-main-file)
 	- [4. Use different schedules for the same scenario](#4-use-different-schedules-for-the-same-scenario)
@@ -56,7 +57,7 @@ conditional_schedule:
     ...
 
 schedule:
-    - {{module1}}
+    - '{{module1}}'
     - path/to/module/module2
     ...
 test_data:
@@ -105,11 +106,14 @@ For instance, depending on the value of DISTRI setting we can schedule an ordere
 ```
 
 #### schedule
-Refers to a sequence of test modules to be executed in the test suite. For the moment it was chosen this format `{{}}`
+Refers to a sequence of test modules to be executed in the test suite. For the moment it was chosen this format `'{{...}}''`
 to indicate that the module or modules executed at this position is conditional to some variable as described in [conditional_schedule](#conditional_schedule).
+
+NOTE: Please, do not forget to wrap conditional schedule in quotes as `{` and `}` are special symbols and can affect parsing.
 
 **NOTE:**
  - [conditional_schedule](#conditional_schedule) does not allow at the moment to represent complex logic like combination of 'and' or 'or' and it does intend to do it due to potentially it would create the same problem that occurs with main.pm. Other kind of logic like a simple exclusion list could be feasible in the near future, for example "run for all except when this variable value is set to some specific value". Reusing of blocks needs to be re-thinked as well and what would be a readable syntax for this. At the moment if the scenario you intend to migrate has complex conditional logic it would require changes in your test modules.
+ - Nested conditional schedules (eg. referencing another conditional schedule from within a conditional schedule) are possible now.
  - The only section that is mandatory is [schedule](#schedule). The rest of the sections in the YAML file can be skipped.
 
 #### test_data
@@ -146,10 +150,14 @@ sub run {
 }
 ```
 
-Besides having test_data in the same yaml file for scheduling, it is possible to import test_data from another file with the following constrains:
- - test_data will be in a dedicated file that only contains data.
- - test_data file will not import data from another file (only one nested level to avoid complexity).
- For instance, we can have a test data file named `scenario_name_test_data.yaml` containing data as follows:
+#### importing
+Besides having the whole data in the same yaml file for scheduling, it is possible to import some parts of it.
+[YAML::PP::Schema::Include](https://metacpan.org/pod/YAML::PP::Schema::Include) and
+[YAML::PP::Schema::Merge](https://metacpan.org/pod/YAML::PP::Schema::Merge) are used for this purpose.
+
+Please see the example for `test_data` below (which also can be applied to other sections):
+
+For instance, there is a test data file named `scenario_name_test_data.yaml` containing data as follows:
 
  ```
  disks:
@@ -158,7 +166,7 @@ Besides having test_data in the same yaml file for scheduling, it is possible to
       - size: 2mb
   ...
 ```
-And we can include those data in `scenario_name.yaml` using `!include` and the path to the file:
+And it is possible to include that data into `scenario_name.yaml` using `<<:`(merge feature) and `!include` with the path to the file:
 ```
 name:           scenario_name_test_data.yaml
 description:    >
@@ -169,20 +177,19 @@ schedule:
   - path/to/module
 ...
 test_data:
-  !include: schedule/path/to/scenario_name_test_data.yaml
+  <<: !include schedule/path/to/scenario_name_test_data.yaml
 ```
--  it is allowed to use multiple `!include` tags in yaml scheduling
-   file. In the case they should be provided as list:
+-  it is allowed to use multiple `!include` in yaml scheduling
+   file. For example:
 
 ```
 ...
 test_data:
-  - !include: 
-    - path/to/first_test_data.yaml
-    - path/to/second_test_data.yaml
+  <<: !include path/to/first_test_data.yaml
+  <<: !include path/to/second_test_data.yaml
 ```
 
-- `!include` tag can be mixed with the test data that is defined in
+- included data can be mixed with the test data that is defined in
   scheduling file directly:
 
 > **_IMPORTANT:_** Test data in scheduling file has priority over the
@@ -195,9 +202,14 @@ test_data:
     - name: vdb
       partitions:
         - size: 3mb
-  !include: path/to/test_data.yaml
+  <<: !include path/to/test_data.yaml
 ```
-Test data sometimes are more related to a particular schedule, sometimes to other test data shared with other test suites and sometimes it is a mix. In those cases, `YAML_TEST_DATA` setting can be used to give us the flexibility to avoid duplicate schedule files just because they have different data and due to it will be pointing to a test data file and at the moment recursive inclusion is not implemented (to reduce complexity),only for this particular case, is allowed the possibility to use `!include` functionality in test data file, not cutting any path for the tester. For instance:
+Test data sometimes is more related to a particular schedule, sometimes  
+to other test data shared with other test suites and sometimes it is a mix.  
+In those cases, `YAML_TEST_DATA` setting can be used to give us the flexibility  
+to avoid duplicate schedule files just because they have different data and due  
+to it will be pointing to a test data file. Only for this particular case,  
+the possibility to use `$include` functionality in test data file is allowed. For instance:
 
 In your yaml for your Job Group configuration for one product you could have:
 ```
@@ -224,7 +236,7 @@ disks:
   - name: vda
     partitions:
       - size: 2mb
-!include: path/to/test_data/shared/among/test_suites.yaml
+<<: !include path/to/test_data/shared/among/test_suites.yaml
   ...
 ```
 In the other data file we could have:
@@ -233,7 +245,7 @@ disks:
   - name: vdb
     partitions:
       - size: 5mb
-!include: path/to/test_data/shared/among/test_suites.yaml
+<<: !include path/to/test_data/shared/among/test_suites.yaml
   ...
 ```
 
@@ -241,6 +253,15 @@ disks:
 > schedule file. Test data in data file has priority over the same data from the imported file (i.e. it
 > allows to override imported data). Latest included data has priority over previous included data in test
 > data file.
+
+Additionally in the test_data structure for your scenario you can expand variables from vars.json, for instance:
+```
+test_data:
+  repos:
+    - name:  SLES-%VERSION%
+      alias: SLES
+      enabled: No
+```
 
 ### 2. Enable scheduler in settings
 

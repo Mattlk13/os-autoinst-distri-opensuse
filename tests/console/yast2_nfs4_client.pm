@@ -8,6 +8,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: yast2-nfs-client nfs-client nfs4-acl-tools
 # Summary: yast2_nfs4_client module
 #   This is the client side of yast2_nfs4_server module.
 #   This uses the yast2 nfs-client module with NFS4 strictly enabled.
@@ -68,7 +69,7 @@ sub run {
     type_string '10.0.2.101';
     # Explore the available shares and select the only available one
     send_key 'alt-e';
-    if (check_screen("console-messages-over-tty", 10)) { record_soft_failure 'bsc#1011815, Console over tty' }
+    if (check_screen("console-messages-over-tty", 10)) { record_soft_failure 'bsc#1174164, Console over tty' }
     assert_screen 'yast2-nfs-client-exported';
     send_key 'alt-o';
     # Set the local mount point
@@ -114,4 +115,3 @@ sub run {
 }
 
 1;
-

@@ -13,6 +13,7 @@
 # You should have received a copy of the GNU General Public License along
 # with this program; if not, see <http://www.gnu.org/licenses/>.
 
+# Package: vlc
 # Summary: Play some free video file with VLC
 # Maintainer: Oliver Kurz <okurz@suse.de>
 
@@ -41,6 +42,11 @@ sub run {
     }
     else {
         wait_still_screen(1);
+        assert_and_click 'close_vlc';
+    }
+
+    if (!check_var('QEMUVGA', 'cirrus')) {
+        x11_start_program('vlc --no-autoscale --loop data/test.ogv', target_match => 'vlc-playing');
         assert_and_click 'close_vlc';
     }
 }

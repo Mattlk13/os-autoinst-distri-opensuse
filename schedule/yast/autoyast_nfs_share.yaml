@@ -1,13 +1,17 @@
-name:           autoyast_multi_btrfs
-description:    >
+---
+name: autoyast_multi_btrfs
+description: >
   Test autoyast installation, while using nfs share
+vars:
+  AUTOYAST: autoyast_sle15/autoyast_nfs_share.xml
+  DESKTOP: textmode
 schedule:
   - autoyast/prepare_profile
   - installation/isosize
   - installation/bootloader_start
   - autoyast/installation
   - installation/first_boot
-  - autoyast/console 
+  - autoyast/console
   - autoyast/clone
   - autoyast/verify_cloned_profile
   - autoyast/verify_nfs_share
@@ -22,20 +26,4 @@ test_data:
     - rpc-statd
     - nfs
   services_status: active
-  # cloned AutoYaST profile validation
-  profile:
-    partitioning:
-      drive:
-        unique_key: device
-        device: openqa.suse.de:/var/lib/openqa/share
-        disklabel: none
-        partitions:
-          - partition:
-              unique_key: mount
-              create: false
-              mount: /test
-        type: CT_NFS
-    services-manager:
-      services:
-        enable:
-          service: nfs
+  <<: !include test_data/yast/autoyast/profiles/nfs_share.yaml

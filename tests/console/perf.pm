@@ -1,12 +1,13 @@
 # SUSE's openQA tests
 #
-# Copyright © 2019 SUSE LLC
+# Copyright © 2019-2020 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: perf
 # Summary: Test basic perf funcionality
 # Maintainer: Orestis Nalmpantis <onalmpantis@suse.de>
 
@@ -17,10 +18,12 @@ use testapi;
 use utils 'zypper_call';
 
 sub run {
-    select_console 'root-console';
+    my $self = shift;
+    $self->select_serial_terminal;
+
     # test 1
     # Installing and testing options -a -d -p
-    zypper_call 'in perf';
+    zypper_call('in perf', exitcode => [0, 102, 103, 106]) if (script_run("which perf") != 0);
     assert_script_run('perf stat -a -d -p 1 sleep 5');
     # test 2
     # Counting with perf stat

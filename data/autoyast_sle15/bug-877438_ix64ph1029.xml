@@ -57,7 +57,6 @@
       </initrd_module>
     </initrd_modules>
     <loader_type>grub2</loader_type>
-    <sections config:type="list"/>
   </bootloader>
   <deploy_image>
     <image_installation config:type="boolean">false</image_installation>
@@ -77,7 +76,6 @@
       <import_gpg_key config:type="boolean">true</import_gpg_key>
     </signature-handling>
     <storage>
-      <partition_alignment config:type="symbol">align_optimal</partition_alignment>
       <start_multipath config:type="boolean">false</start_multipath>
     </storage>
   </general>
@@ -112,10 +110,6 @@
       <timeout config:type="integer">0</timeout>
     </yesno_messages>
   </report>
-  <runlevel>
-    <default_target>multi-user</default_target>
-    <services config:type="list"/>
-  </runlevel>
   <services-manager>
     <default_target>multi-user</default_target>
     <services config:type="list"/>

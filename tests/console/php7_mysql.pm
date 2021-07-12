@@ -1,12 +1,13 @@
 # SUSE's openQA tests
 #
-# Copyright © 2017 SUSE LLC
+# Copyright © 2017-2020 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: php7-mysql mysql sudo
 # Summary: PHP7 code that interacts locally with MySQL
 #   This tests creates a MySQL database and inserts an element. Then,
 #   PHP reads the elements and writes a new one in the database. If
@@ -29,11 +30,13 @@ use strict;
 use warnings;
 use testapi;
 use utils;
+use version_utils 'is_sle';
+use registration qw(add_suseconnect_product get_addon_fullname);
 use apachetest;
 
 sub run {
-    select_console 'root-console';
-
+    my $self = shift;
+    $self->select_serial_terminal;
     setup_apache2(mode => 'PHP7');
     # install requirements
     zypper_call "in php7-mysql mysql sudo";

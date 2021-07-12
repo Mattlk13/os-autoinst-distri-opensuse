@@ -1,15 +1,16 @@
 # SUSE's openQA tests
 #
-# Copyright © 2018 SUSE LLC
+# Copyright © 2018-2021 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: perl-base ltp
 # Summary: Use perl script to run LTP on public cloud
 #
-# Maintainer: Clemens Famulla-Conrad <cfamullaconrad@suse.de>
+# Maintainer: Clemens Famulla-Conrad <cfamullaconrad@suse.de>, qa-c team <qa-c@suse.de>
 
 use base "publiccloud::basetest";
 use strict;
@@ -18,8 +19,13 @@ use testapi;
 use utils;
 use repo_tools 'generate_version';
 use Mojo::UserAgent;
+use LTP::utils qw(get_ltproot get_ltp_version_file);
+use LTP::WhiteList qw(download_whitelist);
+use Mojo::File;
+use publiccloud::utils qw(is_byos select_host_console);
 
-our $root_dir = '/root';
+our $root_dir      = '/root';
+our $ver_linux_log = '';
 
 sub get_ltp_rpm
 {
@@ -43,24 +49,23 @@ sub instance_log_args
 }
 
 sub run {
-    my ($self)   = @_;
+    my ($self, $args) = @_;
     my $arch     = check_var('PUBLIC_CLOUD_ARCH', 'arm64') ? 'aarch64' : 'x86_64';
-    my $ltp_repo = get_var('LTP_REPO', 'http://download.suse.de/ibs/QA:/Head/' . generate_version("-") . '/' . $arch . '/');
-    my $REG_CODE = get_required_var('SCC_REGCODE');
+    my $ltp_repo = get_var('LTP_REPO', 'https://download.opensuse.org/repositories/benchmark:/ltp:/devel/' . generate_version("_") . '/');
+    my $provider;
+    my $instance;
 
-    $self->select_serial_terminal;
+    select_host_console();
 
-    my $ltp_rpm         = get_ltp_rpm($ltp_repo);
-    my $source_rpm_path = $root_dir . '/' . $ltp_rpm;
-    my $remote_rpm_path = '/tmp/' . $ltp_rpm;
-    record_info('LTP RPM', $ltp_repo . $ltp_rpm);
-    assert_script_run('wget ' . $ltp_repo . $ltp_rpm . ' -O ' . $source_rpm_path);
-
-    my $provider = $self->provider_factory();
-    my $instance = $self->{my_instance} = $provider->create_instance();
-    $instance->wait_for_guestregister();
-
-    $instance->scp($source_rpm_path, 'remote:' . $remote_rpm_path);
+    my $qam = get_var('PUBLIC_CLOUD_QAM', 0);
+    if ($qam) {
+        $instance = $self->{my_instance} = $args->{my_instance};
+        $provider = $self->{provider}    = $args->{my_provider};    # required for cleanup
+    } else {
+        $provider = $self->provider_factory();
+        $instance = $self->{my_instance} = $provider->create_instance();
+        $instance->wait_for_guestregister();
+    }
 
     assert_script_run("cd $root_dir");
     assert_script_run('curl ' . data_url('publiccloud/restart_instance.sh') . ' -o restart_instance.sh');
@@ -68,20 +73,39 @@ sub run {
     assert_script_run('chmod +x restart_instance.sh');
     assert_script_run('chmod +x log_instance.sh');
 
-    assert_script_run('git clone -q --single-branch -b runltp_ng_openqa --depth 1 https://github.com/cfconrad/ltp.git');
+    $instance->run_ssh_command(cmd => 'sudo SUSEConnect -r ' . get_required_var('SCC_REGCODE'), timeout => 600) if (is_byos() && !$qam);
 
-    # Install ltp from package on remote
-    $instance->run_ssh_command(cmd => 'sudo SUSEConnect -r ' . $REG_CODE, timeout => 600) if (get_required_var('FLAVOR') =~ m/BYOS/);
-    $instance->run_ssh_command(cmd => 'sudo zypper --no-gpg-checks --gpg-auto-import-keys -q in -y ' . $remote_rpm_path, timeout => 600);
-    $instance->run_ssh_command(cmd => 'sudo CREATE_ENTRIES=1 /opt/ltp/IDcheck.sh',                                       timeout => 300);
+    # in repo with LTP rpm is internal we need to manually upload package to VM
+    if (get_var('LTP_RPM_MANUAL_UPLOAD')) {
+        my $ltp_rpm         = get_ltp_rpm($ltp_repo);
+        my $source_rpm_path = $root_dir . '/' . $ltp_rpm;
+        my $remote_rpm_path = '/tmp/' . $ltp_rpm;
+        record_info('LTP RPM', $ltp_repo . $ltp_rpm);
+        assert_script_run('wget ' . $ltp_repo . $ltp_rpm . ' -O ' . $source_rpm_path);
+        $instance->scp($source_rpm_path, 'remote:' . $remote_rpm_path) if (get_var('LTP_RPM_MANUAL_UPLOAD'));
+        $instance->run_ssh_command(cmd => 'sudo zypper --no-gpg-checks --gpg-auto-import-keys -q in -y ' . $remote_rpm_path, timeout => 600);
+    }
+    else {
+        $instance->run_ssh_command(cmd => 'sudo zypper -q addrepo -fG ' . $ltp_repo . ' ltp_repo', timeout => 600);
+        $instance->run_ssh_command(cmd => 'sudo zypper -q in -y ltp',                              timeout => 600);
+    }
+
+    $ver_linux_log = $instance->run_ssh_command(cmd => get_ltproot() . "/ver_linux");
+
+    my $runltp_ng_repo   = get_var("LTP_RUN_NG_REPO",   "https://github.com/metan-ucw/runltp-ng.git");
+    my $runltp_ng_branch = get_var("LTP_RUN_NG_BRANCH", "master");
+    assert_script_run("git clone -q --single-branch -b $runltp_ng_branch --depth 1 $runltp_ng_repo");
+    $instance->run_ssh_command(cmd => 'sudo CREATE_ENTRIES=1 ' . get_ltproot() . '/IDcheck.sh', timeout => 300);
+    record_info('Kernel info', $instance->run_ssh_command(cmd => q(rpm -qa 'kernel*' --qf '%{NAME}\n' | sort | uniq | xargs rpm -qi)));
 
     my $reset_cmd     = $root_dir . '/restart_instance.sh ' . $self->instance_log_args();
     my $log_start_cmd = $root_dir . '/log_instance.sh start ' . $self->instance_log_args();
 
     assert_script_run($log_start_cmd);
 
-    my $cmd = 'perl -I ltp/tools/runltp-ng ltp/tools/runltp-ng/runltp-ng ';
-    $cmd .= '--logname=ltp_log ';
+    my $cmd = 'perl -I runltp-ng runltp-ng/runltp-ng ';
+    $cmd .= '--logname=ltp_log --verbose ';
+    $cmd .= '--timeout=1200 ';
     $cmd .= '--run ' . get_required_var('COMMAND_FILE') . ' ';
     $cmd .= '--exclude \'' . get_required_var('COMMAND_EXCLUDE') . '\' ';
     $cmd .= '--backend=ssh';
@@ -90,8 +114,7 @@ sub run {
     $cmd .= ':host=' . $instance->public_ip;
     $cmd .= ':reset_command=\'' . $reset_cmd . '\'';
     $cmd .= ':ssh_opts=\'-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no\' ';
-    $cmd .= '--json-format=openqa ';
-
+    $cmd .= '--json_filter=openqa ';
     assert_script_run($cmd, timeout => get_var('LTP_TIMEOUT', 30 * 60));
 }
 
@@ -102,14 +125,66 @@ sub cleanup {
     # Ensure that the ltp script gets killed
     type_string('', terminate_with => 'ETX');
 
-    upload_logs('ltp_log.raw', failok => 1);
-    parse_extra_log(LTP => "$root_dir/ltp_log.json") if (script_run("test -f $root_dir/ltp_log.json") == 0);
-
+    upload_logs('ltp_log.raw',            failok => 1);
+    upload_logs("$root_dir/ltp_log.json", failok => 1);
+    if (script_run("test -f $root_dir/ltp_log.json") == 0) {
+        my $known_issues = download_whitelist();
+        process_ltp_known_issues("$root_dir/ltp_log.json") if $known_issues;
+        parse_extra_log(LTP => "$root_dir/ltp_log.json");
+    }
     if ($self->{my_instance} && script_run("test -f $root_dir/log_instance.sh") == 0) {
         assert_script_run($root_dir . '/log_instance.sh stop ' . $self->instance_log_args());
         assert_script_run("(cd /tmp/log_instance && tar -zcf $root_dir/instance_log.tar.gz *)");
         upload_logs("$root_dir/instance_log.tar.gz", failok => 1);
     }
+}
+
+sub process_ltp_known_issues {
+    my ($self, $ltp_log) = @_;
+    my $decoded_ltp_log = Mojo::JSON::from_json($ltp_log);
+    my $env             = gen_ltp_env();
+    my $suite           = get_required_var('COMMAND_FILE');
+
+    foreach my $test (@{$decoded_ltp_log->{results}}) {
+        if (($test->{status} eq 'fail' || $test->{status} eq 'brok' || $test->{status} eq 'warn')) {
+            my $entry = find_whitelist_entry($env, $suite, $test->{test_fqn});
+            bmwqemu::diag(sprintf("Failure in LTP:%s:%s is known, overriding to softfail", $suite, $test->{test_fqn}));
+            $test->{status} = 'softfail';
+        }
+    }
+    my $final_ltp_log = Mojo::JSON::to_json($decoded_ltp_log);
+    Mojo::File::path($ltp_log)->spurt($final_ltp_log);
+}
+
+sub gen_ltp_env {
+    my $environment = {
+        product     => get_required_var('DISTRI') . ':' . get_required_var('VERSION'),
+        revision    => get_required_var('BUILD'),
+        flavor      => get_required_var('FLAVOR'),
+        arch        => get_var('PUBLIC_CLOUD_ARCH', get_required_var("ARCH")),
+        backend     => get_required_var('BACKEND'),
+        kernel      => '',
+        libc        => '',
+        gcc         => '',
+        harness     => 'SUSE OpenQA',
+        ltp_version => '',
+        #TODO currently we getting only pass or fail due to use of '--openqa-filter' need to properly solve retval issue
+        # from runltp-ng side to get smarter logic on this side
+        retval => '1'
+    };
+    if ($ver_linux_log =~ qr'^Linux\s+(.*?)\s*$'m) {
+        $environment->{kernel} = $1;
+    }
+    if ($ver_linux_log =~ qr'^Linux C Library\s*>?\s*(.*?)\s*$'m) {
+        $environment->{libc} = $1;
+    }
+    if ($ver_linux_log =~ qr'^Gnu C\s*(.*?)\s*$'m) {
+        $environment->{gcc} = $1;
+    }
+    $environment->{ltp_version} = script_output("cat " . get_ltp_version_file());
+    record_info("LTP version", $environment->{ltp_version});
+
+    return $environment;
 }
 
 1;

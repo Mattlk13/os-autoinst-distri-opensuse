@@ -1,7 +1,7 @@
 # SUSE's openQA tests
 #
 # Copyright © 2009-2013 Bernhard M. Wiedemann
-# Copyright © 2012-2019 SUSE LLC
+# Copyright © 2012-2021 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -21,7 +21,7 @@ use warnings;
 use bootloader_setup;
 use registration;
 use testapi;
-use utils qw(OPENQA_FTP_URL type_line_svirt);
+use utils qw(OPENQA_FTP_URL type_line_svirt save_svirt_pty);
 
 sub set_svirt_domain_elements {
     my ($svirt) = shift;
@@ -37,9 +37,8 @@ sub set_svirt_domain_elements {
             $cmdline .= "upgrade=1 ";
         }
 
-        if (my $autoyast = get_var('AUTOYAST')) {
-            $autoyast = data_url($autoyast) if $autoyast !~ /^slp$|:\/\//;
-            $cmdline .= " autoyast=" . $autoyast;
+        if (get_var('AUTOYAST')) {
+            $cmdline .= ' ' . join(' ', autoyast_boot_params);
         }
 
         $cmdline .= ' ' . get_var("EXTRABOOTPARAMS") if get_var("EXTRABOOTPARAMS");
@@ -51,9 +50,9 @@ sub set_svirt_domain_elements {
         $svirt->change_domain_element(os => cmdline => $cmdline);
 
         # show this on screen and make sure that kernel and initrd are actually saved
-        type_string "wget $repo/boot/s390x/initrd -O $zkvm_img_path/$name.initrd\n";
+        enter_cmd "wget $repo/boot/s390x/initrd -O $zkvm_img_path/$name.initrd";
         assert_screen "initrd-saved";
-        type_string "wget $repo/boot/s390x/linux -O $zkvm_img_path/$name.kernel\n";
+        enter_cmd "wget $repo/boot/s390x/linux -O $zkvm_img_path/$name.kernel";
         assert_screen "kernel-saved";
     }
     # after installation we need to redefine the domain, so just shutdown
@@ -82,9 +81,11 @@ sub run {
         if (check_var("VIDEOMODE", "text")) {
             wait_serial("run 'yast.ssh'", 300) || die "linuxrc didn't finish";
             select_console("installation");
-            type_string("TERM=linux yast.ssh\n") && record_soft_failure('bsc#1054448');
+            # If libyui REST API is used, we set it up in installation/setup_libyui
+            enter_cmd("TERM=linux yast.ssh") unless get_var('YUI_REST_API');
         }
         else {
+            # On s390x zKVM we have to process startshell in bootloader
             wait_serial(' Starting YaST2 ', 300) || die "yast didn't start";
             select_console('installation');
         }
@@ -94,6 +95,9 @@ sub run {
 sub post_fail_hook {
     reset_consoles;
     select_console 'svirt';
+
+    upload_logs("/tmp/os-autoinst-openQA-SUT-" . get_var("VIRSH_INSTANCE") . "-stderr.log", failok => 1);
+    enter_cmd "tail /tmp/os-autoinst-openQA-SUT-" . get_var("VIRSH_INSTANCE") . "-stderr.log";
 
     # Enter Linuxrc extra mode
     type_line_svirt 'x', expect => 'Linuxrc extras';

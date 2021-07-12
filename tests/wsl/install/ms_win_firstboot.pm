@@ -8,11 +8,9 @@
 # without any warranty.
 
 # Summary: Boot windows image for the first time and provide basic user environment configuration
-# Maintainer: Ludwig Nussel <ludwig.nussel@suse.de>
+# Maintainer: QAC team <qa-c@suse.de>
 
-use base "windowsbasetest";
-use strict;
-use warnings;
+use Mojo::Base qw(windowsbasetest);
 use testapi;
 
 sub run {
@@ -30,20 +28,20 @@ sub run {
     assert_and_click 'windows-select-personal-use', dclick => 1;
     wait_still_screen stilltime => 2, timeout => 10, similarity_level => 43;
     assert_and_click 'windows-next';
-    assert_screen 'windows-signin-with-ms';
+    assert_screen 'windows-signin-with-ms', 60;
     assert_and_click 'windows-offline';
     wait_still_screen stilltime => 2, timeout => 10, similarity_level => 43;
-    assert_and_click [qw(windows-limited-exp windows-no-signin-ms-instead)], timeout => 60;
+    assert_and_click 'windows-limited-exp', timeout => 60;
     wait_still_screen stilltime => 2, timeout => 10, similarity_level => 43;
     assert_and_click 'windows-create-account';
     wait_still_screen stilltime => 2, timeout => 10, similarity_level => 43;
-    type_string $realname;    # input account name
+    type_string $realname;
     wait_still_screen stilltime => 2, timeout => 10, similarity_level => 43;
     save_screenshot;
     assert_and_click 'windows-next';
     for (1 .. 2) {
         sleep 3;
-        type_password;        # input password
+        type_password;
         save_screenshot;
         assert_and_click 'windows-next';
     }
@@ -58,43 +56,30 @@ sub run {
         sleep 3;
         assert_and_click 'windows-next';
     }
-    assert_screen 'windows-enable-more-devices';
-    assert_and_click 'windows-no';
+
+    my $count        = 0;
+    my @privacy_menu = split(',', get_required_var('WIN_INSTALL_PRIVACY_NEEDLES'));
+    foreach my $tag (@privacy_menu) {
+        send_key('pgdn') if (++$count == 4);
+        assert_and_click $tag;
+        wait_still_screen stilltime => 2, timeout => 10, similarity_level => 43;
+    }
+    assert_and_click 'windows-accept';
+
     assert_screen 'windows-make-cortana-personal-assistant';
     assert_and_click 'windows-accept';
-    wait_still_screen stilltime => 2, timeout => 10, similarity_level => 43;
-    assert_and_click 'windows-dont-use-speech-recognition';
-    wait_still_screen stilltime => 2, timeout => 10, similarity_level => 43;
-    assert_and_click 'windows-accept';
-    wait_still_screen stilltime => 2, timeout => 10, similarity_level => 43;
-    assert_and_click 'windows-dont-user-my-location';
-    wait_still_screen stilltime => 2, timeout => 10, similarity_level => 43;
-    assert_and_click 'windows-accept';
-    wait_still_screen stilltime => 2, timeout => 10, similarity_level => 43;
-    assert_and_click 'windows-turn-off-find-device';
-    wait_still_screen stilltime => 2, timeout => 10, similarity_level => 43;
-    assert_and_click 'windows-accept';
-    wait_still_screen stilltime => 2, timeout => 10, similarity_level => 43;
-    assert_and_click 'windows-send-full-diagnostic-data';
-    wait_still_screen stilltime => 2, timeout => 10, similarity_level => 43;
-    assert_and_click 'windows-accept';
-    wait_still_screen stilltime => 2, timeout => 10, similarity_level => 43;
-    assert_and_click 'windows-dont-improve-inking&typing';
-    wait_still_screen stilltime => 2, timeout => 10, similarity_level => 43;
-    assert_and_click 'windows-accept';
-    wait_still_screen stilltime => 2, timeout => 10, similarity_level => 43;
-    assert_and_click 'windows-dont-get-tailored-experiences';
-    wait_still_screen stilltime => 2, timeout => 10, similarity_level => 43;
-    assert_and_click 'windows-accept';
-    wait_still_screen stilltime => 2, timeout => 10, similarity_level => 43;
-    assert_and_click 'windows-dont-use-adID';
-    wait_still_screen stilltime => 2, timeout => 10, similarity_level => 43;
-    assert_and_click 'windows-accept';
-    assert_screen([qw(windows-desktop windows-first-boot networks-popup-be-discoverable)], 600);
 
-    if (match_has_tag 'network-popup-be-discoverable') {
+    assert_screen([qw(windows-desktop windows-edge-decline networks-popup-be-discoverable)], 600);
+
+    if (match_has_tag 'networks-popup-be-discoverable') {
         assert_and_click 'network-discover-yes';
         wait_screen_change(sub { send_key 'ret' }, 10);
+        assert_screen([qw(windows-desktop windows-edge-decline)]);
+    }
+
+    if (match_has_tag 'windows-edge-decline') {
+        assert_and_click 'windows-edge-decline';
+        assert_screen 'windows-desktop';
     }
 
     # setup stable lock screen background
@@ -108,8 +93,22 @@ sub run {
 
     # turn off hibernation and fast startup
     $self->open_powershell_as_admin;
-    $self->run_in_powershell(q{REG ADD "HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Session Manager\Power" /v HiberbootEnabled /t REG_DWORD /d "0" /f});
-    $self->run_in_powershell('powercfg /hibernate off');
+    $self->run_in_powershell(cmd => q{Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power" -Name HiberbootEnabled -Value 0});
+    $self->run_in_powershell(cmd => 'powercfg /hibernate off');
+    # disable screen's fade to black
+    $self->run_in_powershell(cmd => 'powercfg -change -monitor-timeout-ac 0');
+    # adjust visusal effects to best performance
+    $self->run_in_powershell(cmd => q{Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name VisualFXSetting -Value 2});
+    # remove skype and xbox
+    $self->run_in_powershell(cmd => 'Get-AppxPackage -allusers Microsoft.SkypeApp | Remove-AppxPackage');
+    $self->run_in_powershell(cmd => 'Get-AppxPackage -allusers Microsoft.XboxApp | Remove-AppxPackage');
+    $self->run_in_powershell(cmd => 'Get-AppxPackage -allusers Microsoft.XboxGamingOverlay | Remove-AppxPackage');
+    $self->run_in_powershell(cmd => 'Get-AppxPackage -allusers Microsoft.YourPhone | Remove-AppxPackage');
+    # remove cortana
+    $self->run_in_powershell(cmd => 'Get-AppxPackage -allusers Microsoft.549981C3F5F10 | Remove-AppxPackage');
+    # disable "Let’s finish setting up your device"
+    $self->run_in_powershell(cmd => q{New-Item -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\" -Name UserProfileEngagement -Force});
+    $self->run_in_powershell(cmd => q{New-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\UserProfileEngagement" -Name ScoobeSystemSettingEnabled -Value 0 -PropertyType DWORD});
 
     # poweroff
     $self->reboot_or_shutdown();

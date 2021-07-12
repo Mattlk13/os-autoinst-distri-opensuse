@@ -8,6 +8,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: MozillaFirefox
 # Summary: Firefox: URLs with various protocols (Case#1436118)
 # - Launch xterm, kill firefox, cleanup previous firefox configuration, launch
 # firefox
@@ -32,7 +33,7 @@ sub run {
     my %sites_url = (
         http  => "http://httpbin.org/html",
         https => "https://www.google.com/",
-        ftp   => "ftp://mirror.bej.suse.com/",
+        ftp   => "ftp://mirror.suse.cz/",
         local => "file:///usr/share/w3m/w3mhelp.html"
     );
 

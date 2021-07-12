@@ -13,6 +13,7 @@
 # You should have received a copy of the GNU General Public License along
 # with this program; if not, see <http://www.gnu.org/licenses/>.
 
+# Package: PackageKit
 # Summary: Prepare system for actual desktop specific updates
 # - Disable delta rpms if system is not sle
 # - Unmask packagekit service
@@ -33,7 +34,7 @@ sub run {
     assert_script_run "echo \"download.use_deltarpm = false\" >> /etc/zypp/zypp.conf" if !is_sle;
     systemctl 'unmask packagekit';
 
-    assert_script_run "pkcon refresh", 300;
+    assert_script_run "pkcon refresh", 400;
 }
 
 sub test_flags {

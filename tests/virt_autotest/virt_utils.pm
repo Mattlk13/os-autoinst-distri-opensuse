@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright © 2012-2016 SUSE LLC
+# Copyright © 2012-2020 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -23,26 +23,28 @@ use Data::Dumper;
 use XML::Writer;
 use IO::File;
 use List::Util 'first';
+use LWP::Simple 'head';
 use proxymode;
 use version_utils 'is_sle';
+use virt_autotest::utils;
+use version_utils qw(is_sle get_os_release);
 
 our @EXPORT
-  = qw(enable_debug_logging update_guest_configurations_with_daily_build repl_addon_with_daily_build_module_in_files repl_module_in_sourcefile handle_sp_in_settings handle_sp_in_settings_with_fcs handle_sp_in_settings_with_sp0 clean_up_red_disks lpar_cmd upload_virt_logs generate_guest_asset_name get_guest_disk_name_from_guest_xml compress_single_qcow2_disk upload_supportconfig_log download_guest_assets is_installed_equal_upgrade_major_release generateXML_from_data);
+  = qw(enable_debug_logging update_guest_configurations_with_daily_build repl_addon_with_daily_build_module_in_files repl_module_in_sourcefile handle_sp_in_settings handle_sp_in_settings_with_fcs handle_sp_in_settings_with_sp0 clean_up_red_disks lpar_cmd upload_virt_logs generate_guest_asset_name get_guest_disk_name_from_guest_xml compress_single_qcow2_disk get_guest_list remove_vm download_guest_assets restore_downloaded_guests is_installed_equal_upgrade_major_release generateXML_from_data check_guest_disk_type recreate_guests perform_guest_restart collect_host_and_guest_logs cleanup_host_and_guest_logs monitor_guest_console start_monitor_guest_console stop_monitor_guest_console is_developing_sles is_registered_sles);
 
 sub enable_debug_logging {
 
-    # turn on debug for libvirtd
+    #turn on debug and log filter for libvirtd
+    #set log_level = 1 'debug'
+    #the size of libvirtd with debug level and without any filter on sles15sp3 xen is over 100G,
+    #which consumes all the disk space. Now get comfirmation from virt developers,
+    #log filter is set to store component logs with different levels.
     my $libvirtd_conf_file = "/etc/libvirt/libvirtd.conf";
     if (!script_run "ls $libvirtd_conf_file") {
         script_run "sed -i '/log_level *=/{h;s/^[# ]*log_level *= *[0-9].*\$/log_level = 1/};\${x;/^\$/{s//log_level = 1/;H};x}' $libvirtd_conf_file";
         script_run "sed -i '/log_outputs *=/{h;s%^[# ]*log_outputs *=.*[0-9].*\$%log_outputs=\"1:file:/var/log/libvirt/libvirtd.log\"%};\${x;/^\$/{s%%log_outputs=\"1:file:/var/log/libvirt/libvirtd.log\"%;H};x}' $libvirtd_conf_file";
-        script_run "grep -e log_level -e log_outputs $libvirtd_conf_file";
-        if (is_sle('<12')) {
-            script_run 'rclibvirtd restart';
-        }
-        else {
-            script_run 'systemctl restart libvirtd';
-        }
+        script_run "sed -i '/log_filters *=/{h;s%^[# ]*log_filters *=.*[0-9].*\$%log_filters=\"1:qemu 1:libvirt 4:object 4:json 4:event 3:util 1:util.pci\"%};\${x;/^\$/{s%%log_filters=\"1:qemu 1:libvirt 4:object 4:json 4:event 3:util 1:util.pci\"%;H};x}' $libvirtd_conf_file";
+        script_run "grep -e log_level -e log_outputs -e log_filters $libvirtd_conf_file";
     }
     save_screenshot;
 
@@ -55,6 +57,21 @@ sub enable_debug_logging {
     }
     save_screenshot;
 
+    # enable qemu core dumps
+    my $qemu_conf_file = "/etc/libvirt/qemu.conf";
+    if (!script_run "ls $qemu_conf_file") {
+        script_run "sed -i '/max_core *=/{h;s/^[# ]*max_core *=.*\$/max_core = \"unlimited\"/};\${x;/^\$/{s//max_core = \"unlimited\"/;H};x}' $qemu_conf_file";
+        script_run "grep max_core $qemu_conf_file";
+    }
+    save_screenshot;
+
+    #restart libvirtd to make debug level and coredump take effect
+    if (is_sle('<12')) {
+        script_run 'rclibvirtd restart';
+    }
+    else {
+        script_run 'systemctl restart libvirtd';
+    }
 }
 
 sub get_version_for_daily_build_guest {
@@ -221,7 +238,7 @@ sub clean_up_red_disks {
     my @disks_nu_array        = split(/\n+/, $disks_not_used);
     my $disks_nu_length       = scalar @disks_nu_array;
     my $get_swaps_not_need = "$get_disks_fs_overview | grep -v -e \"sd[a].*\" | grep -i \"\\\[SWAP\\\]\" | grep -o -e \"sd[b-z]\\\{1,\\\}[[:digit:]]\\\{0,\\\}\"";
-    my $swaps_not_used = script_output($get_swaps_not_need, $wait_script, type_command => 1, proceed_on_failure => 1);
+    my $swaps_not_used     = script_output($get_swaps_not_need, $wait_script, type_command => 1, proceed_on_failure => 1);
 
     my $wipe_fs_cmd      = "";
     my $installed_os_ver = get_var('VERSION_TO_INSTALL', get_var('VERSION', ''));
@@ -290,6 +307,17 @@ sub upload_virt_logs {
 sub generate_guest_asset_name {
     my $guest = shift;
 
+    #get build number
+    my $build_num;
+    #for clone job, get build number from SCC proxy which is set in Media
+    if (get_var('CASEDIR')) {
+        get_var('SCC_URL') =~ /^http.*all-([\d\.]*)\.proxy\.*/;
+        $build_num = $1;
+    }
+    else {
+        $build_num = get_required_var('BUILD');
+    }
+
     my $composed_name
       = 'guest_'
       . $guest
@@ -297,11 +325,9 @@ sub generate_guest_asset_name {
       . get_required_var('DISTRI') . '-'
       . get_required_var('VERSION')
       . '_build'
-      . get_required_var('BUILD') . '_'
+      . $build_num . '_'
       . lc(get_required_var('SYSTEM_ROLE')) . '_'
       . get_required_var('ARCH');
-
-    record_info('Guest asset info', "Guest asset name is : $composed_name");
 
     return $composed_name;
 }
@@ -310,89 +336,125 @@ sub get_guest_disk_name_from_guest_xml {
     my $guest = shift;
 
     # Our automation only supports single guest disk
-    my $disk_from_xml = script_output("virsh dumpxml $guest | sed -n \'/disk/,/\\\/disk/p\' | grep 'source file=' | grep -v iso");
+    my $disk_from_xml = script_output "virsh dumpxml $guest | xmlstarlet sel -t -v //disk/source/\@file";
     record_info('Guest disk config from xml', "Guest $guest disk_from_xml is: $disk_from_xml.");
-    $disk_from_xml =~ /file='(.*)'/;
-    $disk_from_xml = $1;
     die 'There is no guest disk file parsed out from guest xml configuration!' unless $disk_from_xml;
-    record_info('Guest disk name', "Guest $guest disk_from_xml is: $disk_from_xml.");
 
     return $disk_from_xml;
 }
 
 # Should only do compress from qcow2 disk to qcow2 in our automation(upload guest asset scheme).
+# If disk compression fails at the first time, try again with --force-share option to avoid shared "write" lock conflict.
+# Generally speaking, guest image compressing and uploading should only be done on successful guest installation and after any other operations is done on the guest.
+# If qemu image operation on the guest still can not proceed due to failing to get "write" lock, then "--force-share" option can be tried to solve the problem.
+# And "--force-share" is a new option that is introduced to modern SLES, it might be available on some older SLES, for example, 11-SP4 or some 12-SPx.
+# Please refer to https://qemu.readthedocs.io/en/latest/tools/qemu-img.html to ease your mind on working with --force-share and convert and many others.
 sub compress_single_qcow2_disk {
     my ($orig_disk, $compressed_disk) = @_;
 
     if ($orig_disk =~ /qcow2/) {
         my $cmd = "nice ionice qemu-img convert -c -p -O qcow2 $orig_disk $compressed_disk";
-        assert_script_run($cmd, 360);
+        if (script_run($cmd, 360) ne 0) {
+            $cmd = "nice ionice qemu-img convert --force-share -c -p -O qcow2 $orig_disk $compressed_disk";
+            die("Disk compression failed from $orig_disk to $compressed_disk.") if (script_run($cmd, 360) ne 0);
+        }
         save_screenshot;
         record_info('Disk compression', "Disk compression done from $orig_disk to $compressed_disk.");
     }
 }
 
-sub upload_supportconfig_log {
-    my $datetab = script_output("date '+%Y%m%d%H%M%S'");
-    script_run("cd;supportconfig -t . -B supportconfig.$datetab", 600);
-    script_run("tar zcvfP nts_supportconfig.$datetab.tar.gz nts_supportconfig.$datetab");
-    upload_logs("nts_supportconfig.$datetab.tar.gz");
-    script_run("rm -rf nts_supportconfig.*");
-    save_screenshot;
+# get the guest list from the test suite settings
+sub get_guest_list {
+
+    #get the guest pattern from test suite settings
+    #GUEST_PATTERN, GUEST_LIST, or GUEST_LIST is used in different test suites,
+    #thus I use GUEST_LIST uniformly.
+    if (get_var('GUEST_PATTERN')) {
+        set_var('GUEST_LIST', get_var('GUEST_PATTERN'));
+    }
+    elsif (get_var('GUEST')) {
+        set_var('GUEST_LIST', get_var('GUEST'));
+    }
+    handle_sp_in_settings_with_fcs("GUEST_LIST");
+    my $guest_pattern = get_required_var("GUEST_LIST");
+
+    #parse the guest list from the pattern
+    return $guest_pattern if ($guest_pattern =~ /win/i);
+    my $qa_guest_config_file = "/usr/share/qa/virtautolib/data/vm_guest_config_in_vh_update";
+    my $hypervisor_type      = get_var('SYSTEM_ROLE', '');
+    my $guest_list = script_output "source /usr/share/qa/virtautolib/lib/virtlib; get_vms_from_config_file $qa_guest_config_file $guest_pattern $hypervisor_type";
+    record_soft_failure("Not found guest pattern $guest_pattern in $qa_guest_config_file") if ($guest_list eq '');
+    return $guest_list;
+}
+
+# remove a vm listed via 'virsh list'
+sub remove_vm {
+    my $vm               = shift;
+    my $is_persistent_vm = script_output "virsh dominfo $vm | sed -n '/Persistent:/p' | awk '{print \$2}'";
+    my $vm_state         = script_output "virsh domstate $vm";
+    if ($vm_state ne "shut off") {
+        assert_script_run("virsh destroy $vm", 30);
+    }
+    if ($is_persistent_vm eq "yes") {
+        assert_script_run("virsh undefine $vm", 30);
+    }
 }
 
 # Download guest image and xml from a NFS location to local
 # the image and xml is coming from a guest installation testsuite
 # need set SKIP_GUEST_INSTALL=1 in the test suite settings
+# return the account of the guests downloaded
 # only available on x86_64
 sub download_guest_assets {
 
     # guest_pattern is a string, like sles-11-sp4-64, may or may not with pv or fv given.
-    my ($guest_pattern, $vm_xml_dir) = @_;
-
-    # list the guests matched the pattern
-    my $qa_guest_config_file = "/usr/share/qa/virtautolib/data/vm_guest_config_in_vh_update";
-    my $hypervisor_type      = get_var('SYSTEM_ROLE', '');
-    my $install_guest_list = script_output "source /usr/share/qa/virtautolib/lib/virtlib; get_vms_from_config_file $qa_guest_config_file $guest_pattern $hypervisor_type";
-    save_screenshot;
-    if ($install_guest_list eq '') {
-        record_soft_failure("Not found guest pattern $guest_pattern in $qa_guest_config_file");
-        return 1;
-    }
+    my ($expected_guests, $vm_xml_dir) = @_;
 
     # mount the remote NFS location of guest assets
     # OPENQA_URL="localhost" in local openQA instead of the IP, so the line below need to be turned on and set to the webUI IP when you are using local openQA
     # Tips: Using local openQA, you need "rcnfs-server start & vi /etc/exports; exportfs -r")
-    # set_var('OPENQA_URL', "your_ip");
+    # set OPENQA_URL="your_ip" on openQA web UI
     my $openqa_server = get_required_var('OPENQA_URL');
-    $openqa_server =~ s/^http:\/\///;
-    my $remote_export_dir = "/var/lib/openqa/factory/other/";
-    my $mount_point       = "/tmp/remote_guest";
+
+    # check if vm xml files have been uploaded
+    my @available_guests = ();
+    foreach my $guest (split "\n", $expected_guests) {
+        my $guest_asset = generate_guest_asset_name("$guest");
+        my $vm_disk_url = $openqa_server . "/assets/other/" . $guest_asset . '.disk';
+        $vm_disk_url =~ s#^(?!http://)(.*)$#http://$1#;    #add 'http://' at beginning if needed.
+        if (head($vm_disk_url)) {
+            push @available_guests, $guest;
+        }
+        else {
+            record_soft_failure("$vm_disk_url not found!");
+        }
+    }
+    return 0 unless @available_guests;
 
     # clean up vm stuff
+    my $mount_point = "/tmp/remote_guest";
     script_run "[ -d $mount_point ] && { if findmnt $mount_point; then umount $mount_point; rm -rf $mount_point; fi }";
     script_run "mkdir -p $mount_point";
     script_run "[ -d $vm_xml_dir ] && rm -rf $vm_xml_dir; mkdir -p $vm_xml_dir";
     my $disk_image_dir = script_output "source /usr/share/qa/virtautolib/lib/virtlib; get_vm_disk_dir";
-    script_run "umount $disk_image_dir; rm -rf $disk_image_dir";
+    script_run "umount $disk_image_dir; rm -rf $disk_image_dir/*";
     script_run "[ -d /tmp/prj3_guest_migration/ ] && rm -rf /tmp/prj3_guest_migration/" if get_var('VIRT_NEW_GUEST_MIGRATION_SOURCE');
-    save_screenshot;
 
     # tip: nfs4 is not supported on sles12sp4, so use '-t nfs' instead of 'nfs4' here.
+    $openqa_server =~ s/^http:\/\///;
+    my $remote_export_dir = "/var/lib/openqa/factory/other/";
     assert_script_run("mount -t nfs $openqa_server:$remote_export_dir $mount_point", 120);
-    save_screenshot;
 
     # copy guest images and xml files to local
     # test aborts if failing in copying all the guests
-    my $remote_guest_count = 0;
-    foreach my $guest (split "\n", $install_guest_list) {
+    my $guest_count = 0;
+    foreach my $guest (@available_guests) {
         my $guest_asset           = generate_guest_asset_name("$guest");
         my $remote_guest_xml_file = $guest_asset . '.xml';
         my $remote_guest_disk     = $guest_asset . '.disk';
 
         # download vm xml file
         my $rc = script_run("cp $mount_point/$remote_guest_xml_file $vm_xml_dir/$guest.xml", 60);
-        save_screenshot;
         if ($rc) {
             record_soft_failure("Failed copying: $mount_point/$remote_guest_xml_file");
             next;
@@ -416,19 +478,25 @@ sub download_guest_assets {
         script_run "[ -d `dirname $local_guest_image` ] || mkdir -p `dirname $local_guest_image`";
         $rc = script_run("cp $mount_point/$remote_guest_disk $local_guest_image", 300);    #it took 75 seconds copy from vh016 to vh001
         script_run "ls -l $local_guest_image";
-        save_screenshot;
         if ($rc) {
             record_soft_failure("Failed to download: $remote_guest_disk");
             next;
         }
-        $remote_guest_count++;
+        $guest_count++;
     }
 
     # umount
     script_run("umount $mount_point");
-    save_screenshot;
 
-    return 1 if ($remote_guest_count == 0);
+    return $guest_count;
+}
+
+#Start the guest from the downloaded vm xml and vm disk file
+sub restore_downloaded_guests {
+    my ($guest, $vm_xml_dir) = @_;
+    record_info("Guest", "$guest");
+    my $vm_xml = "$vm_xml_dir/$guest.xml";
+    assert_script_run("virsh define $vm_xml", 30);
 }
 
 sub is_installed_equal_upgrade_major_release {
@@ -457,26 +525,28 @@ sub generateXML_from_data {
     my $timestamp = localtime(time);
     $writer->startTag(
         'testsuites',
-        id       => "0",
-        error    => "n/a",
-        failures => $xmldata{"fail_nums"},
-        name     => $xmldata{"product_name"},
-        skipped  => $xmldata{"skip_nums"},
-        tests    => "$count",
-        time     => $xmldata{"test_time"}
+        id           => "0",
+        error        => "n/a",
+        failures     => $xmldata{"fail_nums"},
+        softfailures => $xmldata{"softfail_nums"},
+        name         => $xmldata{"product_name"},
+        skipped      => $xmldata{"skip_nums"},
+        tests        => "$count",
+        time         => $xmldata{"test_time"}
     );
     $writer->startTag(
         'testsuite',
-        id        => "0",
-        error     => "n/a",
-        failures  => $xmldata{"fail_nums"},
-        hostname  => hostname(),
-        name      => $xmldata{"product_tested_on"},
-        package   => $xmldata{"package_name"},
-        skipped   => $xmldata{"skip_nums"},
-        tests     => $count,
-        time      => $xmldata{"test_time"},
-        timestamp => $timestamp
+        id           => "0",
+        error        => "n/a",
+        failures     => $xmldata{"fail_nums"},
+        softfailures => $xmldata{"softfail_nums"},
+        hostname     => hostname(),
+        name         => $xmldata{"product_tested_on"},
+        package      => $xmldata{"package_name"},
+        skipped      => $xmldata{"skip_nums"},
+        tests        => $count,
+        time         => $xmldata{"test_time"},
+        timestamp    => $timestamp
     );
 
     #Generate testcase xml by calling subroutine generate_testcase_xml
@@ -524,9 +594,9 @@ sub generateXML_from_data {
 sub generate_testcase_xml {
     my ($xml_writer, $testcase, $testinfo) = @_;
 
-    my $testcase_time = eval { $testinfo->{test_time} ? $testinfo->{test_time} : 'n/a' };
-    my $testerror     = eval { $testinfo->{error}     ? $testinfo->{error}     : 'n/a' };
-    my $testoutput    = eval { $testinfo->{output}    ? $testinfo->{output}    : 'n/a' };
+    my $testcase_time   = eval { $testinfo->{test_time} ? $testinfo->{test_time} : 'n/a' };
+    my $testerror       = eval { $testinfo->{error}     ? $testinfo->{error}     : 'n/a' };
+    my $testoutput      = eval { $testinfo->{output}    ? $testinfo->{output}    : 'n/a' };
     my $testcase_status = $testinfo->{status};
     my $testguest       = $testinfo->{guest};
     $xml_writer->startTag(
@@ -543,6 +613,188 @@ sub generate_testcase_xml {
     $xml_writer->endTag('system-out');
     $xml_writer->dataElement(failure => "affected subject: $testguest") unless $testcase_status eq 'success';
     $xml_writer->endTag('testcase');
+}
+
+#RAW do not support Snapshot, so skip Snapshot test if guest disk type as RAW
+sub check_guest_disk_type {
+    my $guest           = shift;
+    my $guest_disk_type = script_output("virsh dumpxml $guest | grep \"<driver \" | grep -o \"type='.*'\" | cut -d \"'\" -f2 | tail -n1");
+    if ($guest_disk_type =~ /raw/) {
+        record_info "INFO", "SKIP Snapshot test if guest disk type as $guest_disk_type";
+        return 1;
+    }
+    else {
+        if ($guest_disk_type =~ /qcow2/) {
+            record_info "INFO", "Start Snapshot test with the guest disk type as $guest_disk_type";
+            return 0;
+        }
+    }
+}
+
+#recreate all defined guests
+sub recreate_guests {
+    my $based_guest_dir = shift;
+    return if get_var('INCIDENT_ID');    # QAM does not recreate guests every time
+    my $get_vm_hostnames   = "virsh list  --all | grep sles | awk \'{print \$2}\'";
+    my $vm_hostnames       = script_output($get_vm_hostnames, 30, type_command => 0, proceed_on_failure => 0);
+    my @vm_hostnames_array = split(/\n+/, $vm_hostnames);
+    foreach (@vm_hostnames_array)
+    {
+        script_run("virsh destroy $_");
+        script_run("virsh undefine $_");
+        script_run("virsh define /$based_guest_dir/$_.xml");
+        script_run("virsh start $_");
+    }
+}
+
+#Perform restart operation on desired guests of local or remote host
+#User should check guest status as expected in his/her customized and
+#suitable way after restart if there are associated specific concerns
+#guest_to_restart argument is reference to array of desired guest domains
+#wait_script argument is timeout to wait for execution to complete
+#host_addr argument takes format in ip address or fqdn as host address
+#For example, $host_ip = "10.12.13.14"; @guest_name = ('guest1', 'guest2');
+#Call this subroutine by using perform_guest_restart(\@guest_name, 90, $host_ip);
+#All these arguments can be left empty which means all guests, 120s and local host
+sub perform_guest_restart {
+    my ($guest_to_restart, $wait_script, $host_addr) = @_;
+    my $connect_uri         = "";
+    my @guest_restart_array = ();
+    $connect_uri         = "-c qemu+ssh://root\@$host_addr/system" if ((defined $host_addr)        && ($host_addr ne ''));
+    @guest_restart_array = @$guest_to_restart                      if ((defined $guest_to_restart) && ($guest_to_restart ne ''));
+    $wait_script         = "120"                                   if ((!defined $wait_script) || ($wait_script eq ''));
+    my $guest_types         = "sles|win";
+    my $get_guest_domains   = "virsh $connect_uri list --all | grep -E \"${guest_types}\" | awk \'{print \$2}\'";
+    my $guest_domains       = script_output($get_guest_domains, $wait_script, type_command => 0, proceed_on_failure => 0);
+    my @guest_domains_array = split(/\n+/, $guest_domains);
+    if (scalar(@guest_restart_array) == 0) {
+        script_run "virsh $connect_uri destroy $_", $wait_script foreach (@guest_domains_array);
+        script_run "virsh $connect_uri start $_",   $wait_script foreach (@guest_domains_array);
+    }
+    else {
+        foreach my $guest (@guest_restart_array) {
+            if (grep { $_ eq $guest } @guest_domains_array) {
+                script_run "virsh $connect_uri destroy $guest", $wait_script;
+                script_run "virsh $connect_uri start $guest",   $wait_script;
+            }
+            else {
+                record_info("Guest missing", "Guest $guest does not exist");
+                diag("Guest $guest does not exist");
+            }
+        }
+    }
+}
+
+#This subroutine collects desired logs from host and guest, and place them into folder /tmp/virt_logs_residence on host then compress it to /tmp/virt_logs_all.tar.gz
+#Please refer to virt_logs_collector.sh and fetch_logs_from_guest.sh in data/virt_autotest for their detailed functionality, implementation and usage
+sub collect_host_and_guest_logs {
+    my ($guest_wanted, $host_extra_logs, $guest_extra_logs) = @_;
+    $guest_wanted     //= '';
+    $host_extra_logs  //= '';
+    $guest_extra_logs //= '';
+
+    my $logs_collector_script_url = data_url("virt_autotest/virt_logs_collector.sh");
+    script_output("curl -s -o ~/virt_logs_collector.sh $logs_collector_script_url", 180, type_command => 0, proceed_on_failure => 0);
+    save_screenshot;
+    script_output("chmod +x ~/virt_logs_collector.sh && ~/virt_logs_collector.sh -l \"$host_extra_logs\" -g \"$guest_wanted\" -e \"$guest_extra_logs\"", 3600 / get_var('TIMEOUT_SCALE', 1), type_command => 1, proceed_on_failure => 1);
+    save_screenshot;
+
+    my $logs_fetching_script_url = data_url("virt_autotest/fetch_logs_from_guest.sh");
+    script_output("curl -s -o ~/fetch_logs_from_guest.sh $logs_fetching_script_url", 180, type_command => 0, proceed_on_failure => 0);
+    save_screenshot;
+    script_output("chmod +x ~/fetch_logs_from_guest.sh && ~/fetch_logs_from_guest.sh -g \"$guest_wanted\" -e \"$guest_extra_logs\"", 1800, type_command => 1, proceed_on_failure => 1);
+    save_screenshot;
+
+    upload_logs("/tmp/virt_logs_all.tar.gz");
+    upload_logs("/var/log/virt_logs_collector.log");
+    upload_logs("/var/log/fetch_logs_from_guest.log");
+    save_screenshot;
+    script_run("rm -f -r /tmp/virt_logs_all.tar.gz /var/log/virt_logs_collector.log /var/log/fetch_logs_from_guest.log");
+    save_screenshot;
+}
+
+#The script clean_up_virt_logs.sh records its output in /var/log/clean_up_virt_logs.log, you can choose to upload it when necessary
+#Please refer to clean_up_virt_logs.sh data/virt_autotest for its detailed functionality, implementation and usage
+sub cleanup_host_and_guest_logs {
+    my ($extra_logs_to_cleanup) = @_;
+    $extra_logs_to_cleanup //= '';
+
+    #Clean dhcpd and named services up explicity
+    if (get_var('VIRT_AUTOTEST')) {
+        script_run("brctl addbr br123;brctl setfd br123 0;ip addr add 192.168.123.1/24 dev br123;ip link set br123 up");
+        if (!get_var('VIRT_UEFI_GUEST_INSTALL')) {
+            my @control_operation = ('restart');
+            virt_autotest::utils::manage_system_service('dhcpd', \@control_operation);
+            virt_autotest::utils::manage_system_service('named', \@control_operation);
+        }
+    }
+    my $logs_cleanup_script_url = data_url("virt_autotest/clean_up_virt_logs.sh");
+    script_output("curl -s -o ~/clean_up_virt_logs.sh $logs_cleanup_script_url", 180, type_command => 0, proceed_on_failure => 0);
+    save_screenshot;
+    script_output("chmod +x ~/clean_up_virt_logs.sh && ~/clean_up_virt_logs.sh -l \"$extra_logs_to_cleanup\"", 1800, type_command => 1, proceed_on_failure => 1);
+    save_screenshot;
+}
+
+#The script guest_console_monitor.sh records its output in /var/log/guest_console_monitor.log, you can choose to upload it when necessary
+#The recorded guest console output is placed in folder /tmp/virt_logs_residence on host, you can choose to upload it separately or by calling
+#collect_host_and_guest_logs. Please refer to guest_console_monitor.sh in data/virt_autotest for its detailed functionality, implementation and usage
+sub monitor_guest_console {
+    my ($monitor_button) = @_;
+    my $monitor_option = "";
+
+    if ($monitor_button eq "start") {
+        $monitor_option = "-s";
+    }
+    elsif ($monitor_button eq "stop") {
+        $monitor_option = "-e";
+    }
+    else {
+        diag("Guest console monitor can only accept start or stop as options.");
+        return;
+    }
+
+    my $guest_console_script_url = data_url("virt_autotest/guest_console_monitor.sh");
+    script_output("curl -s -o ~/guest_console_monitor.sh $guest_console_script_url", 180, type_command => 0, proceed_on_failure => 0);
+    save_screenshot;
+    script_output("chmod +x ~/guest_console_monitor.sh && ~/guest_console_monitor.sh $monitor_option", 1800, type_command => 1, proceed_on_failure => 1);
+    save_screenshot;
+}
+
+#Start monitoring guest console
+sub start_monitor_guest_console {
+    monitor_guest_console('start');
+    save_screenshot;
+}
+
+#Stop monitor guest console
+sub stop_monitor_guest_console {
+    monitor_guest_console('stop');
+    save_screenshot;
+}
+
+#Detect whether running sles is the developing version
+sub is_developing_sles {
+    my ($running_sles_rel, $running_sles_sp) = get_os_release;
+    my $developing_sles_version = get_required_var('VERSION');
+    $developing_sles_version = get_required_var('TARGET_DEVELOPING_VERSION') if get_var('REPO_0_TO_INSTALL');
+    my ($developing_sles_rel) = $developing_sles_version =~ /^(\d+).*/img;
+    my ($developing_sles_sp)  = $developing_sles_version =~ /^.*sp(\d+)$/img;
+    if ($running_sles_rel eq $developing_sles_rel && $running_sles_sp eq $developing_sles_sp) {
+        return 1;
+    }
+    else {
+        return 0;
+    }
+}
+
+#Detect whether SUT host is installed with scc registration
+sub is_registered_sles {
+    if (!get_var('SCC_REGISTER') || check_var('SCC_REGISTER', 'none') || check_var('SCC_REGISTER', '')) {
+        return 0;
+    }
+    else {
+        return 1;
+    }
 }
 
 1;

@@ -8,6 +8,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: yast2-snapper
 # Summary: Test for yast2-snapper
 # - Disable gnome-screensaver
 # - Install yast2-snapper
@@ -35,6 +36,12 @@ use y2_module_consoletest;
 sub run {
     my $self = shift;
 
+    # Make sure that the module runs on graphical mode
+    unless (check_screen 'generic-desktop', 0) {
+        select_console 'x11';
+        $self->handle_displaymanager_login() if (check_screen 'linux-login', 0);
+    }
+
     # Turn off screensaver
     x11_start_program('xterm');
     turn_off_gnome_screensaver if check_var('DESKTOP', 'gnome');
@@ -45,15 +52,19 @@ sub run {
 
     # Start an xterm as root
     x11_start_program('xterm');
+    # Wait before typing to avoid typos
+    wait_still_screen(5);
     become_root;
     script_run "cd";
     $self->y2snapper_adding_new_snapper_conf;
-    y2_module_consoletest::yast2_console_exec(yast2_module => 'snapper');
+    my $module_name = y2_module_consoletest::yast2_console_exec(yast2_module => 'snapper');
     $self->y2snapper_new_snapshot;
+    wait_serial("$module_name-0") || die "yast2 snapper failed";
+
     $self->y2snapper_apply_filesystem_changes;
-    y2_module_consoletest::yast2_console_exec(yast2_module => 'snapper');
+    $module_name = y2_module_consoletest::yast2_console_exec(yast2_module => 'snapper');
     $self->y2snapper_show_changes_and_delete;
-    $self->y2snapper_clean_and_quit;
+    $self->y2snapper_clean_and_quit($module_name);
 }
 
 sub post_fail_hook {

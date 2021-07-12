@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright © 2019 SUSE LLC
+# Copyright © 2019-2021 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -15,7 +15,7 @@
 # different steps (e.g. Partitions Tab should be selected first for "Add" button
 # to be visible).
 #
-# Maintainer: Oleksandr Orlov <oorlov@suse.de>
+# Maintainer: QE YaST <qa-sle-yast@suse.de>
 
 package Installation::Partitioner::LibstorageNG::v3::ExpertPartitionerController;
 use strict;
@@ -43,9 +43,26 @@ sub new {
     }, $class;
 }
 
+=head2 run_expert_partitioner
+
+  run_expert_partitioner([$option]);
+
+Opens the Expert Partiotioner from the Suggested Partitioning page .
+if the C<$option> is given it will open one of the current proposal or existing partition.
+Expected values are [existing|current].
+if none is given the existing partiotion is used as deault.
+
+=cut
 sub run_expert_partitioner {
-    my ($self) = @_;
-    $self->get_suggested_partitioning_page()->select_start_with_existing_partitions();
+    my ($self, $option) = @_;
+    $option //= 'existing';
+    record_info $option;
+    if ($option eq 'current') {
+        $self->get_suggested_partitioning_page()->select_start_with_current_partitions();
+    }
+    else {
+        $self->get_suggested_partitioning_page()->select_start_with_existing_partitions();
+    }
 }
 
 sub add_partition_on_gpt_disk {

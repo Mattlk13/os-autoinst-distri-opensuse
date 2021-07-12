@@ -13,10 +13,12 @@
 use strict;
 use warnings;
 use base "virt_autotest_base";
+use virt_autotest::utils;
 use testapi;
 use virt_utils;
 use utils;
 use Utils::Backends 'is_remote_backend';
+use virt_autotest::utils qw(is_xen_host);
 
 sub install_package {
 
@@ -92,10 +94,16 @@ sub install_package {
     }
 
     if (get_var("PROXY_MODE")) {
-        if (get_var("XEN")) {
+        if (is_xen_host) {
             zypper_call("in -t pattern xen_server", 1800);
         }
     }
+
+    virt_autotest::utils::install_default_packages();
+
+    ###Install required package for window guest installation on xen host
+    if (get_var('GUEST_LIST') =~ /^win-.*/ && (is_xen_host)) { zypper_call '--no-refresh --no-gpg-checks in mkisofs' }
+
 }
 
 sub run {

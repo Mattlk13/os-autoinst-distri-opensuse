@@ -1,5 +1,5 @@
 # Copyright © 2009-2013 Bernhard M. Wiedemann
-# Copyright © 2012-2020 SUSE LLC
+# Copyright © 2012-2021 SUSE LLC
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -15,13 +15,13 @@
 # with this program; if not, see <http://www.gnu.org/licenses/>.
 package y2_installbase;
 
-use base "installbasetest";
+use parent 'y2_base';
 use strict;
 use warnings;
-use ipmi_backend_utils;
+
 use testapi;
-use network_utils;
-use version_utils qw(is_caasp is_sle);
+
+use version_utils qw(is_microos is_sle);
 use y2_logs_helper 'get_available_compression';
 use utils qw(type_string_slow zypper_call);
 use lockapi;
@@ -116,6 +116,7 @@ sub go_to_patterns {
         send_key 'alt-s';
     }
     else {
+        assert_screen 'installation-settings-overview-loaded',  60;
         send_key_until_needlematch 'packages-section-selected', 'tab';
         send_key 'ret';
     }
@@ -178,6 +179,7 @@ sub process_patterns {
     if (get_required_var('PATTERNS')) {
         if (check_var('PATTERNS', 'all') && !check_var('VIDEOMODE', 'text')) {
             $self->select_all_patterns_by_menu();
+            $self->deselect_pattern() if get_var('EXCLUDE_PATTERNS');
         }
         else {
             $self->select_specific_patterns_by_iteration();
@@ -210,12 +212,12 @@ available patterns.
 =cut
 sub select_all_patterns_by_menu {
     my ($self) = @_;
-    # move mouse on patterns and open menu
-    mouse_set 100, 400;
-    mouse_click 'right';
-    wait_still_screen 3;
+    # Ensure mouse on certain pattern then right click
+    assert_and_click("minimal-system", button => 'right');
+    assert_screen 'selection-menu';
     # select action on all patterns
     wait_screen_change { send_key 'a'; };
+    assert_screen 'all-select-install';
     # confirm install
     wait_screen_change { send_key 'ret'; };
     mouse_hide;
@@ -223,6 +225,25 @@ sub select_all_patterns_by_menu {
     send_key 'alt-o';
     $self->accept3rdparty();
     assert_screen 'inst-overview';
+}
+
+=head2 deselect_pattern
+
+    deselect_pattern();
+
+Deselect patterns from already selected ones.
+=cut
+sub deselect_pattern {
+    my ($self) = @_;
+    my %patterns;    # set of patterns to be processed
+                     # fill with variable values
+    @patterns{split(/,/, get_var('EXCLUDE_PATTERNS'))} = ();
+    $self->go_to_patterns();
+    for my $p (keys %patterns) {
+        send_key_until_needlematch "$p-selected", 'down';
+        send_key ' ';    #deselect pattern
+        assert_screen 'on-pattern';
+    }
 }
 
 =head2 select_specific_patterns_by_iteration
@@ -337,9 +358,10 @@ sub toogle_package {
 
 sub use_wicked {
     script_run "cd /proc/sys/net/ipv4/conf";
-    script_run("for i in *[0-9]; do echo BOOTPROTO=dhcp > /etc/sysconfig/network/ifcfg-\$i; wicked --debug all ifup \$i; done", 300);
+    script_run("for i in *[0-9]; do echo BOOTPROTO=dhcp > /etc/sysconfig/network/ifcfg-\$i; wicked --debug all ifup \$i; done", 600);
     save_screenshot;
 }
+
 sub use_ifconfig {
     script_run "dhcpcd eth0";
 }
@@ -369,7 +391,7 @@ sub get_to_console {
     if ($ret && match_has_tag("linuxrc-repo-not-found")) {    # KVM only
         send_key "ctrl-alt-f9";
         assert_screen "inst-console";
-        type_string "blkid\n";
+        enter_cmd "blkid";
         save_screenshot();
         wait_screen_change { send_key 'ctrl-alt-f3' };
         save_screenshot();
@@ -490,33 +512,6 @@ sub deal_with_dependency_issues {
     }
 }
 
-sub save_upload_y2logs {
-    my ($self, %args) = @_;
-
-    return if (get_var('NOLOGS'));
-    $args{suffix} //= '';
-
-    # Do not test/recover network if collect from installation system, as it won't work anyway with current approach
-    # Do not recover network on non-qemu backend, as not implemented yet
-    $args{no_ntwrk_recovery} //= (get_var('BACKEND') !~ /qemu/);
-
-    # Try to recover network if cannot reach gw and upload logs if everything works
-    if (can_upload_logs() || (!$args{no_ntwrk_recovery} && recover_network())) {
-        assert_script_run 'sed -i \'s/^tar \(.*$\)/tar --warning=no-file-changed -\1 || true/\' /usr/sbin/save_y2logs';
-        my $filename = "/tmp/y2logs$args{suffix}.tar" . get_available_compression();
-        assert_script_run "save_y2logs $filename", 180;
-        upload_logs $filename;
-    } else {    # Redirect logs content to serial
-        script_run("journalctl -b --no-pager > /dev/$serialdev");
-        script_run("dmesg > /dev/$serialdev");
-        script_run("cat /var/log/YaST/y2log > /dev/$serialdev");
-    }
-    save_screenshot();
-    # We skip parsing yast2 logs in each installation scenario, but only if
-    # test has failed or we want to explicitly identify failures
-    $self->investigate_yast2_failure() unless $args{skip_logs_investigation};
-}
-
 sub save_remote_upload_y2logs {
     my ($self, %args) = @_;
 
@@ -526,87 +521,12 @@ sub save_remote_upload_y2logs {
     type_string 'sed -i \'s/^tar \(.*$\)/tar --warning=no-file-changed -\1 || true/\' /usr/sbin/save_y2logs';
     send_key 'ret';
     my $filename = "/tmp/y2logs$args{suffix}.tar" . get_available_compression();
-    type_string "save_y2logs $filename\n";
+    enter_cmd "save_y2logs $filename";
     my $uploadname = +(split('/', $filename))[2];
     my $upname     = ($args{log_name} || $autotest::current_test->{name}) . '-' . $uploadname;
-    type_string "curl --form upload=\@$filename --form upname=$upname " . autoinst_url("/uploadlog/$upname") . "\n";
+    enter_cmd "curl --form upload=\@$filename --form upname=$upname " . autoinst_url("/uploadlog/$upname") . "";
     save_screenshot();
     $self->investigate_yast2_failure();
-}
-
-sub save_system_logs {
-    my ($self) = @_;
-
-    return if (get_var('NOLOGS'));
-
-    if (get_var('FILESYSTEM', 'btrfs') =~ /btrfs/) {
-        assert_script_run 'btrfs filesystem df /mnt | tee /tmp/btrfs-filesystem-df-mnt.txt';
-        assert_script_run 'btrfs filesystem usage /mnt | tee /tmp/btrfs-filesystem-usage-mnt.txt';
-        upload_logs '/tmp/btrfs-filesystem-df-mnt.txt';
-        upload_logs '/tmp/btrfs-filesystem-usage-mnt.txt';
-    }
-    assert_script_run 'df -h';
-    assert_script_run 'df > /tmp/df.txt';
-    upload_logs '/tmp/df.txt';
-
-    # Log connections
-    script_run('ss -tulpn > /tmp/connections.txt');
-    upload_logs '/tmp/connections.txt';
-    # Check network traffic
-    script_run('for run in {1..10}; do echo "RUN: $run"; nstat; sleep 3; done | tee /tmp/network_traffic.log');
-    upload_logs '/tmp/network_traffic.log';
-    # Check VM load
-    script_run('for run in {1..3}; do echo "RUN: $run"; vmstat; sleep 5; done | tee /tmp/cpu_mem_usage.log');
-    upload_logs '/tmp/cpu_mem_usage.log';
-
-    $self->save_and_upload_log('pstree',  '/tmp/pstree');
-    $self->save_and_upload_log('ps auxf', '/tmp/ps_auxf');
-}
-
-sub save_strace_gdb_output {
-    my ($self, $is_yast_module) = @_;
-    return if (get_var('NOLOGS'));
-
-    # Collect yast2 installer or yast2 module trace if is still running
-    if (!script_run(qq{ps -eo pid,comm | grep -i [y]2start | cut -f 2 -d " " > /dev/$serialdev}, 0)) {
-        chomp(my $yast_pid = wait_serial(qr/^[\d{4}]/, 10));
-        return unless defined($yast_pid);
-        my $trace_timeout = 120;
-        my $strace_log    = '/tmp/yast_trace.log';
-        my $strace_ret    = script_run("timeout $trace_timeout strace -f -o $strace_log -tt -p $yast_pid", ($trace_timeout + 5));
-
-        upload_logs $strace_log if script_run "! [[ -e $strace_log ]]";
-
-        # collect installer proc fs files
-        my @procfs_files = qw(
-          mounts
-          mountinfo
-          mountstats
-          maps
-          status
-          stack
-          cmdline
-          environ
-          smaps);
-
-        my $opt = defined($is_yast_module) ? 'module' : 'installer';
-        foreach (@procfs_files) {
-            $self->save_and_upload_log("cat /proc/$yast_pid/$_", "/tmp/yast2-$opt.$_");
-        }
-        # We enable gdb differently in the installer and in the installed SUT
-        my $system_management_locked;
-        if ($is_yast_module) {
-            $system_management_locked = zypper_call('in gdb', exitcode => [0, 7]) == 7;
-        }
-        else {
-            script_run 'extend gdb';
-        }
-        unless ($system_management_locked) {
-            my $gdb_output = '/tmp/yast_gdb.log';
-            my $gdb_ret    = script_run("gdb attach $yast_pid --batch -q -ex 'thread apply all bt' -ex q > $gdb_output", ($trace_timeout + 5));
-            upload_logs $gdb_output if script_run '! [[ -e /tmp/yast_gdb.log ]]';
-        }
-    }
 }
 
 sub post_fail_hook {
@@ -626,12 +546,17 @@ sub post_fail_hook {
         $self->remount_tmp_if_ro;
         # Avoid collectin logs twice when investigate_yast2_failure() is inteded to hard-fail
         $self->save_upload_y2logs unless get_var('ASSERT_Y2LOGS');
-        return if is_caasp;
+        return if is_microos;
         $self->save_system_logs;
 
         # Collect yast2 installer  strace and gbd debug output if is still running
         $self->save_strace_gdb_output;
     }
+}
+
+# All steps in the installation are 'fatal'.
+sub test_flags {
+    return {fatal => 1};
 }
 
 1;

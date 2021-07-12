@@ -52,7 +52,7 @@ sub run {
     my $patches = '';
     $patches = get_patches($incident_id, $repo) if $incident_id;
 
-    pkcon_quit;
+    quit_packagekit;
     zypper_call("ref");
     zypper_call("pt");
     save_screenshot;
@@ -71,7 +71,7 @@ sub run {
     install_packages($patch_status) if $patch_status;
 
     prepare_system_shutdown;
-    type_string "reboot\n";
+    enter_cmd "reboot";
     $self->wait_boot(bootloader_time => 200);
 }
 

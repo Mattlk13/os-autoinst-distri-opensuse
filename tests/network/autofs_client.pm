@@ -1,12 +1,13 @@
 # SUSE's openQA tests
 #
-# Copyright © 2019 SUSE LLC
+# Copyright © 2019-2021 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: autofs nfs-client
 # Summary: It waits until a nfs server is ready and mounts a dir from that one.
 #          It also mounts another dir to check nfsidmap functionality.
 # - Calls check_autofs_service (start/stop/restart/status autofs)
@@ -46,6 +47,9 @@ use strict;
 use warnings;
 
 sub run {
+    # autofs client needs mutex_wait
+    mutex_wait 'barrier_setup_done';
+
     select_console "root-console";
     my $nfs_server              = "10.0.2.101";
     my $remote_mount            = "/tmp/nfs/server";
@@ -55,7 +59,7 @@ sub run {
     my $test_conf_file          = '/etc/auto.share';
     my $test_mount_dir          = '/mnt/test';
     my $test_mount_dir_nfsidmap = '/mnt/test_nfsidmap';
-    my $test_conf_file_content  = "echo  test    -ro,no_subtree_check              $nfs_server:$remote_mount > $test_conf_file";
+    my $test_conf_file_content  = "test -ro,no_subtree_check $nfs_server:$remote_mount";
 
     # autofs
     check_autofs_service();
@@ -69,6 +73,7 @@ sub run {
     assert_script_run("nfsidmap -c || true");
     assert_script_run("mkdir -p $test_mount_dir_nfsidmap");
 
+    mutex_wait 'barrier_setup_done';
     barrier_wait 'AUTOFS_SUITE_READY';
 
     # autofs

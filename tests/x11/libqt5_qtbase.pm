@@ -1,12 +1,13 @@
 # SUSE's openQA tests
 #
-# Copyright © 2012-2019 SUSE LLC
+# Copyright © 2012-2020 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: libqt5-qttools yast2-installation gcc gcc-c++ libQt5Core-devel libQt5Gui-devel libQt5Network-devel libQt5Widgets-devel
 # Summary: libqt5-qtbase: testing of the qtbase libraries
 # - Install and launch Qt Designer
 # - Create default UI elements, run design preview
@@ -24,20 +25,8 @@ use version_utils 'is_sle';
 use registration qw(cleanup_registration register_product add_suseconnect_product get_addon_fullname remove_suseconnect_product);
 
 sub run {
-    my $self = shift;
-
-    # Install required packages
-    # designer-qt5 is in package libqt5-qttools, yast release notes in yast2-installation
-    # SDK needs to be added for 12
-    if (is_sle('<=12-SP5')) {
-        select_console 'root-console';
-        cleanup_registration;
-        register_product;
-        add_suseconnect_product(get_addon_fullname('sdk'));
-    }
-    select_console 'x11';
-    ensure_unlocked_desktop;
-    ensure_installed("libqt5-qttools yast2-installation");
+    select_console('x11');
+    ensure_installed("libqt5-qttools yast2-installation", timeout => 180);
 
     # Test designer-qt5
     x11_start_program('designer-qt5');
@@ -55,7 +44,7 @@ sub run {
     send_key "alt-f4";                           # close program
 
     # Compile an application and run it, check that exits with 0
-    ensure_installed "gcc gcc-c++ libQt5Core-devel libQt5Gui-devel libQt5Network-devel libQt5Widgets-devel";
+    ensure_installed "gcc gcc-c++ libQt5Core-devel libQt5Gui-devel libQt5Network-devel libQt5Widgets-devel", timeout => 400;
 
     x11_start_program('xterm');
     assert_script_run 'cd data';
@@ -64,11 +53,7 @@ sub run {
     assert_script_run 'qmake-qt5';
     assert_script_run 'make';
     assert_script_run './libqt5-qtbase';
-    type_string "exit\n";
-}
-
-sub post_fail_hook {
-    my ($self) = @_;
+    enter_cmd "exit";
 }
 
 1;

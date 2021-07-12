@@ -7,6 +7,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: PackageKit gnome-packagekit
 # Summary: PackageKit update using gpk
 # - Install gnome-packagekit
 # - Check if desktop is not locked, unlock if necessary
@@ -48,7 +49,7 @@ sub setup_system {
 
 sub tell_packagekit_to_quit {
     # tell the PackageKit daemon to stop in order to next load with new libzypp
-    # this is different from pkcon_quit
+    # this is different from quit_packagekit
     x11_start_program('xterm');
     script_run("pkcon quit");
     send_key("ctrl-d");
@@ -59,8 +60,9 @@ sub run {
     my ($self) = @_;
     if (is_sle '15+') {
         select_console 'root-console';
-        zypper_call("in gnome-packagekit", timeout => 90);
-        record_soft_failure 'bsc#1081584';
+        if (script_run 'rpm -q "gnome-packagekit"') {
+            zypper_call("in gnome-packagekit", timeout => 90);
+        }
     }
     select_console 'x11', await_console => 0;
     ensure_unlocked_desktop;
@@ -92,7 +94,7 @@ sub run {
             do {
                 assert_screen \@updates_installed_tags, 3600;
                 if (match_has_tag("Policykit")) {
-                    type_string "$password\n";
+                    enter_cmd "$password";
                     pop @updates_installed_tags;
                 }
                 if (match_has_tag("updates_failed")) {

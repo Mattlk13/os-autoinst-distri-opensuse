@@ -7,6 +7,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: crmsh
 # Summary: Create filesystem and check content
 # Maintainer: Loic Devulder <ldevulder@suse.com>
 
@@ -77,7 +78,7 @@ sub run {
 
     # Format the Filesystem device
     if (is_node(1)) {
-        assert_script_run "mkfs -t $fs_type $fs_opts $fs_lun", $default_timeout;
+        assert_script_run "mkfs -t $fs_type $fs_opts \"$fs_lun\"", $default_timeout;
     }
     else {
         diag 'Wait until Filesystem device is formatted...';
@@ -189,7 +190,7 @@ sub run {
     }
 
     # Return to default directory
-    type_string "cd\n";
+    enter_cmd "cd";
 
     # Wait until Filesystem content is checked
     barrier_wait("FS_CHECKED_${barrier_tag}_$cluster_name");

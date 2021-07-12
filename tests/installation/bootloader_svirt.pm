@@ -17,10 +17,11 @@ use strict;
 use warnings;
 use testapi;
 use utils;
-use version_utils qw(is_jeos is_caasp is_installcheck is_rescuesystem is_sle is_vmware);
+use version_utils qw(is_jeos is_microos is_installcheck is_rescuesystem is_sle is_vmware);
 use registration 'registration_bootloader_cmdline';
 use data_integrity_utils 'verify_checksum';
 use File::Basename;
+use network_utils qw(genmac);
 
 sub vmware_set_permanent_boot_device {
     return unless is_vmware;
@@ -30,9 +31,9 @@ sub vmware_set_permanent_boot_device {
     send_key 'ret' && return unless $boot_device;
     # Enter menu with available boot devices
     send_key 'f2';
-    send_key_until_needlematch('vmware_bios_boot_tab', 'right', 10, 2);
-    send_key_until_needlematch("vmware_bios_boot_${boot_device}",     'down', 5);
-    send_key_until_needlematch("vmware_bios_boot_top_${boot_device}", '+',    5);
+    send_key_until_needlematch('vmware_bios_boot_tab',                'right', 10, 2);
+    send_key_until_needlematch("vmware_bios_boot_${boot_device}",     'down',  5);
+    send_key_until_needlematch("vmware_bios_boot_top_${boot_device}", '+',     5);
     send_key 'f10';
     assert_screen('vmware_bios_boot_confirm');
     send_key 'ret';
@@ -49,7 +50,7 @@ sub search_image_on_svirt_host {
     my $path = $svirt->get_cmd_output("find $dir -name $basename | head -n1 | awk 1 ORS=''", {domain => $domain});
     die "Unable to find image $basename in $dir" unless $path;
     diag("Image found: $path");
-    type_string("# Copying image $basename...\n");
+    enter_cmd("# Copying image $basename...");
     return $path;
 }
 
@@ -57,14 +58,14 @@ sub run {
     my $arch       = get_var('ARCH');
     my $vmm_family = get_required_var('VIRSH_VMM_FAMILY');
     my $vmm_type   = get_required_var('VIRSH_VMM_TYPE');
-
-    my $svirt = select_console('svirt');
-    my $name  = $svirt->name;
+    my $svirt      = select_console('svirt');
+    my $name       = $svirt->name;
     my $repo;
+    my $vmware_openqa_datastore;
 
     # Clear datastore on VMware host
     if (check_var('VIRSH_VMM_FAMILY', 'vmware')) {
-        my $vmware_openqa_datastore = "/vmfs/volumes/" . get_required_var('VMWARE_DATASTORE') . "/openQA/";
+        $vmware_openqa_datastore = "/vmfs/volumes/" . get_required_var('VMWARE_DATASTORE') . "/openQA/";
         $svirt->get_cmd_output("set -x; rm -f ${vmware_openqa_datastore}*${name}*", {domain => 'sshVMwareServer'});
     }
 
@@ -105,7 +106,7 @@ sub run {
     my $basedir = svirt_host_basedir();
     # This part of the path-to-image is missing on VMware
     my $share_factory = check_var('VIRSH_VMM_FAMILY', 'vmware') ? '' : 'share/factory/';
-    my $isodir        = "$basedir/openqa/${share_factory}iso $basedir/openqa/${share_factory}iso/fixed";
+    my $isodir        = "$basedir/openqa/${share_factory}iso/ $basedir/openqa/${share_factory}iso/fixed/";
     # In netinstall we don't have ISO media, for the rest we attach it, if it's defined
     if (my $isofile = get_var('ISO')) {
         my $isopath = search_image_on_svirt_host($svirt, $isofile, $isodir);
@@ -116,6 +117,7 @@ sub run {
                 dev_id => $dev_id
             });
         $dev_id = chr((ord $dev_id) + 1);    # return next letter in alphabet
+        (undef, $isodir) = fileparse($isopath);
     }
     # Add addon media (if present at all)
     foreach my $n (1 .. 9) {
@@ -134,8 +136,20 @@ sub run {
     my $hdddir = "$basedir/openqa/${share_factory}hdd $basedir/openqa/${share_factory}hdd/fixed";
     my $size_i = get_var('HDDSIZEGB', '10');
     foreach my $n (1 .. get_var('NUMDISKS')) {
-        if (my $hdd = get_var('HDD_' . $n)) {
+        if (my $full_hdd = get_var('HDD_' . $n)) {
+            my $hdd     = basename($full_hdd);
             my $hddpath = search_image_on_svirt_host($svirt, $hdd, $hdddir);
+            if ($hddpath =~ m/vmdk\.xz$/) {
+                my $nfs_ro = $hddpath;
+                $hddpath = "$vmware_openqa_datastore/$hdd" =~ s/vmdk\.xz/vmdk/r;
+                # do nothing if the image is already unpacked in datastore
+                if ($svirt->run_cmd("test -e $hddpath", domain => 'sshVMwareServer')) {
+                    my $ret = $svirt->run_cmd("cp $nfs_ro $vmware_openqa_datastore", domain => 'sshVMwareServer');
+                    die "Image copy to datastore failed!\n" if $ret;
+                    $ret = $svirt->run_cmd("xz --decompress --keep --verbose $vmware_openqa_datastore/$hdd", domain => 'sshVMwareServer');
+                    die "Image decompress in datastore failed!\n" if $ret;
+                }
+            }
             $svirt->add_disk(
                 {
                     backingfile => 1,
@@ -155,7 +169,11 @@ sub run {
     }
 
     ## Verify checksum of the copied images
-    my $errors = verify_checksum('/var/lib/libvirt/images/');
+    my $location = '/var/lib/libvirt/images/';
+    if (is_vmware) {
+        $location = get_var('BOOT_HDD_IMAGE') ? $vmware_openqa_datastore : $isodir;
+    }
+    my $errors = verify_checksum $location;
     record_info("Checksum", $errors, result => 'fail') if $errors;
 
     # We need to use 'tablet' as a pointer device, i.e. a device
@@ -219,11 +237,17 @@ sub run {
     if ($vmm_family eq 'kvm') {
         $iface_model = 'virtio';
     }
-    elsif ($vmm_family eq 'xen' && $vmm_type eq 'hvm') {
-        $iface_model = 'netfront';
+    elsif ($vmm_family eq 'xen') {
+        $ifacecfg{type}        = 'bridge';
+        $ifacecfg{source}      = {bridge  => 'br0'};
+        $ifacecfg{virtualport} = {type    => 'openvswitch'};
+        $ifacecfg{mac}         = {address => genmac('00:16:3e')};
+        $iface_model           = 'netfront';
     }
     elsif ($vmm_family eq 'vmware') {
         $iface_model = 'e1000';
+    } else {
+        die "Unsupported value of *VIRSH_VMM_FAMILY*\n";
     }
 
     if ($iface_model) {
@@ -272,44 +296,41 @@ sub run {
         $svirt->suspend;
         my $cmdline = '';
         $cmdline .= 'textmode=1 '                         if check_var('VIDEOMODE', 'text');
-        $cmdline .= 'rescue=1 '                           if is_installcheck || is_rescuesystem;          # rescue mode
+        $cmdline .= 'rescue=1 '                           if is_installcheck || is_rescuesystem;
         $cmdline .= get_var('EXTRABOOTPARAMS') . ' '      if get_var('EXTRABOOTPARAMS');
         $cmdline .= registration_bootloader_cmdline . ' ' if check_var('SCC_REGISTER', 'installation');
-        type_string "export pty=`virsh dumpxml $name | grep \"console type=\" | sed \"s/'/ /g\" | awk '{ print \$5 }'`\n";
-        type_string "echo \$pty\n";
+        enter_cmd "export pty=`virsh dumpxml $name | grep \"console type=\" | sed \"s/'/ /g\" | awk '{ print \$5 }'`";
+        enter_cmd "echo \$pty";
         $svirt->resume;
         wait_serial("Press enter to boot the selected OS", 10) || die "Can't get to GRUB";
         # Do not boot OS from disk, select installation medium
-        if (!get_var('BOOT_HDD_IMAGE') && get_var('ISO') && get_var('HDD_1') && !is_jeos && !is_caasp) {
-            type_string "echo -en '\\033[B' > \$pty\n";                                                   # key down
+        if (!get_var('BOOT_HDD_IMAGE') && get_var('ISO') && get_var('HDD_1') && !is_jeos && !is_microos) {
+            enter_cmd "echo -en '\\033[B' > \$pty";    # key down
         }
-        type_string "echo e > \$pty\n";                                                                   # edit
+        enter_cmd "echo e > \$pty";                    # edit
 
-        if (is_jeos or is_caasp) {
-            for (1 .. 4) { type_string "echo -en '\\033[B' > \$pty\n"; }                                  # four-times key down
+        my $max = (!is_jeos) ? 2 : (is_sle '<15-sp1') ? 4 : 13;
+        enter_cmd "echo -en '\\033[B' > \$pty" for (1 .. $max);    # $max-times key down
+        enter_cmd "echo -en '\\033[K' > \$pty";                    # end of line
+
+        if (is_sle '12-SP2+') {
+            enter_cmd "echo -en ' xen-fbfront.video=32,1024,768 xen-kbdfront.ptr_size=1024,768' > \$pty";    # set kernel framebuffer
+            enter_cmd "echo -en ' console=hvc console=tty' > \$pty";                                         # set consoles
         }
         else {
-            $cmdline .= 'linemode=0 ';                                                                    # workaround for bsc#1066919
-            for (1 .. 2) { type_string "echo -en '\\033[B' > \$pty\n"; }                                  # four-times key down
+            enter_cmd "echo -en ' xenfb.video=4,1024,768 ' > \$pty";                                         # set kernel framebuffer
+            enter_cmd "echo -en ' console=xvc console=tty ' > \$pty";                                        # set consoles
+            $cmdline .= 'linemode=0 ';                                                                       # workaround for bsc#1066919
         }
-        type_string "echo -en '\\033[K' > \$pty\n";                                                       # end of line
-        type_string "echo -en ' $cmdline' > \$pty\n";
-        if (is_sle('12-SP2+') or is_caasp) {
-            type_string "echo -en ' xen-fbfront.video=32,1024,768 xen-kbdfront.ptr_size=1024,768 ' > \$pty\n";    # set kernel framebuffer
-            type_string "echo -en ' console=hvc console=tty ' > \$pty\n";                                         # set consoles
-        }
-        else {
-            type_string "echo -en ' xenfb.video=4,1024,768' > \$pty\n";                                           # set kernel framebuffer
-            type_string "echo -en ' console=xvc console=tty' > \$pty\n";                                          # set consoles
-        }
+        enter_cmd "echo -en ' $cmdline' > \$pty";
 
-        type_string "echo -en '\\x18' > \$pty\n";                                                                 # send Ctrl-x to boot guest kernel
+        enter_cmd "echo -en '\\x18' > \$pty";                                                                # send Ctrl-x to boot guest kernel
         save_screenshot;
     }
 
     # connects to a guest VNC session
     select_console('sut', await_console => 0);
-    vmware_set_permanent_boot_device('cdrom');
+    vmware_set_permanent_boot_device($boot_device);
 }
 
 

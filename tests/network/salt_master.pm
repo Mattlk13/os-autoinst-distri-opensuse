@@ -1,12 +1,13 @@
 # SUSE's openQA tests
 #
-# Copyright © 2016-2018 SUSE LLC
+# Copyright © 2016-2021 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: salt-master salt-minion sysstat
 # Summary: Test Salt stack on two machines. Here we test mainly the
 #  master but minion is also present just for having more of those.
 # - Install salt-master
@@ -37,8 +38,11 @@ use lockapi;
 use utils qw(script_retry zypper_call);
 
 sub run {
+    barrier_create('SALT_MINIONS_READY', 2);
+    barrier_create('SALT_FINISHED',      2);
+    mutex_create 'barrier_setup_done';
     my $self = shift;
-    select_console 'root-console';
+    $self->select_serial_terminal;
 
     # Install, configure and start the salt master
     $self->master_prepare();
@@ -95,9 +99,7 @@ sub run {
     assert_script_run("salt --state-output=terse -t 300 '*' state.highstate", 300);
     mutex_create 'SALT_STATES_SYSCTL';
 
-    # Stop both master and minion at the end
     barrier_wait 'SALT_FINISHED';
-    $self->stop();
 }
 
 1;

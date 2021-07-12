@@ -7,6 +7,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 #
+# Package: health-checker
 # Summary: Check that health-check service works correctly
 # Maintainer: Ciprian Cret <ccret@suse.com>
 
@@ -15,7 +16,6 @@ use warnings;
 use base "opensusebasetest";
 use testapi;
 use transactional qw(process_reboot trup_install trup_shell);
-use version_utils 'is_caasp';
 use utils;
 
 
@@ -40,6 +40,8 @@ sub compare_id {
 }
 
 sub run {
+    select_console 'root-console';
+
     if (script_run 'rpm -q health-checker') {
         trup_install 'health-checker';
         systemctl 'enable health-checker';
@@ -53,8 +55,7 @@ sub run {
     compare_id;
 
     # update rebootmgr.sh to force health-checker to fail
-    assert_script_run "cp /usr/lib/health-checker/rebootmgr.sh /tmp/rebootmgr_bk.sh";
-    trup_shell "sed -i 's/exit 0/exit 1/g' /usr/lib/health-checker/rebootmgr.sh", reboot => 0;
+    trup_shell 'f=$(rpm --eval %{_libexecdir})/health-checker/fail.sh; echo -e \'#/bin/sh\n[ "$1" != "check" ]\' > $f && chmod a+x $f', reboot => 0;
 
     # check that the changes applied and we have a new snapshot
     my $current_id = get_btrfsid;
@@ -62,10 +63,7 @@ sub run {
     die "The current snapshot is not ahead of the logged one" unless $current_id > $logged_id;
 
     # Automated rollback shows grub menu twice (timeout disabled)
-    type_string "reboot\n";
-    assert_screen 'grub2', 100;
-    wait_screen_change { send_key 'ret' };
-    process_reboot;
+    process_reboot(automated_rollback => 1);
 
     my $final_id = get_btrfsid;
     die "health-checker does not rollback to the correct snapshot" unless $initial_id == $final_id;
@@ -77,12 +75,12 @@ sub run {
 }
 
 sub post_fail_hook {
-    script_run "journalctl -u health-checker > health-checker.log", 60;
+    script_run "journalctl -u health-checker -o short-precise > health-checker.log", 60;
     upload_logs "health-checker.log";
 
     # revert changes to rebootmgr.sh and reboot
-    if (script_run "test -e /tmp/rebootmgr_bk") {
-        trup_shell "mv /tmp/rebootmgr_bk.sh /usr/lib/health-checker/rebootmgr.sh";
+    if (script_run('test -e $(rpm --eval %{_libexecdir})/health-checker/fail.sh') == 0) {
+        trup_shell 'rm $(rpm --eval %{_libexecdir})/health-checker/fail.sh';
     }
 }
 

@@ -7,6 +7,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: glib2-tools nautilus
 # Summary: Case 1503753: Gnome - Some types of files should
 #  be opened by corresponding applications
 # Maintainer: Zhaocong Jia <zcjia@suse.com> Grace Wang <grace.wang@suse.com>
@@ -56,34 +57,34 @@ sub prepare_application_environment {
     # Open nautilus
     x11_start_program('nautilus');
     send_key "ctrl-l";
-    type_string "/home/$username/gnometest\n";
+    enter_cmd "/home/$username/gnometest";
     send_key "ret";
     assert_screen 'gnomecase-defaultapps-nautilus';
 }
 
 sub open_default_apps {
     # Open test files with default applications
-    assert_and_dclick "gnomecase-defaultapps-jpgfile";    #open jpg
+    assert_and_dclick "gnomecase-defaultapps-jpgfile";     #open jpg
     assert_screen 'gnomecase-defaultapps-jpgopen';
-    send_key "ctrl-w";                                    #close eog
+    send_key "ctrl-w";                                     #close eog
     wait_still_screen;
-    assert_and_dclick "gnomecase-defaultapps-pngfile";    #open png
+    assert_and_dclick "gnomecase-defaultapps-pngfile";     #open png
     assert_screen 'gnomecase-defaultapps-pngopen';
-    send_key "ctrl-w";                                    #close eog
+    send_key "ctrl-w";                                     #close eog
     wait_still_screen;
-    assert_and_dclick "gnomecase-defaultapps-pdffile";    #open pdf
+    assert_and_dclick "gnomecase-defaultapps-pdffile";     #open pdf
     wait_still_screen;
     send_key "super-up";
     assert_screen 'evince-open-pdf';
-    send_key "ctrl-w";                                    #close evince
+    send_key "ctrl-w";                                     #close evince
     wait_still_screen;
-    assert_and_dclick "gnomecase-defaultapps-bz2file";    #open bzip
+    assert_and_dclick "gnomecase-defaultapps-bz2file";     #open bzip
     assert_screen 'gnomecase-defaultapps-bz2open';
-    send_key "ctrl-w" unless is_sle('15+');               #close fileroller
+    send_key "ctrl-w" unless is_sle('15+');                #close fileroller
     wait_still_screen;
-    assert_and_dclick "gnomecase-defaultapps-gzfile";     #open gzip
+    assert_and_dclick "gnomecase-defaultapps-gzfile";      #open gzip
     assert_screen 'gnomecase-defaultapps-gzopen';
-    send_key "ctrl-w" unless is_sle('15+');               #close fileroller
+    send_key "ctrl-w" unless is_sle('15+');                #close fileroller
     wait_still_screen;
     assert_and_dclick "gnomecase-defaultapps-htmlfile";    #open html
     assert_screen 'gnomecase-defaultapps-firefoxopen';
@@ -96,18 +97,18 @@ sub open_default_apps {
 sub check_default_apps {
     my @apps = @_;
 
-    my $default    = 1;
-    my $returnCode = 1;
-    my @message    = ();
+    my $default     = 1;
+    my $application = "";
+    my @message     = ();
     for my $app (@apps) {
-        if (is_sle('15+')) {
-            $returnCode = script_run("[ '$app->[1]' == \$(gio mime '$app->[0]' |  awk 'NR==1{print \$NF}' | sed 's/[[:space:]]//' ) ]");
+        if (is_sle('<15')) {
+            $application = script_output("gvfs-mime --query '$app->[0]' | awk 'NR==1{print \$NF}' | sed 's/[[:space:]]//'");
         }
         else {
-            $returnCode = script_run("[ '$app->[1]' == \$(gvfs-mime --query '$app->[0]' |  awk 'NR==1{print \$NF}' | sed 's/[[:space:]]//' ) ]");
+            $application = script_output("gio mime '$app->[0]' | awk 'NR==1{print \$NF}' | sed 's/[[:space:]]//'");
         }
-        if ($returnCode) {
-            push @message, "The mimetype $app->[0] should open with $app->[1]";
+        if ($application ne $app->[1]) {
+            push @message, "The mimetype $app->[0] should open with $app->[1], but opens with $application";
             $default = 0;
         }
     }

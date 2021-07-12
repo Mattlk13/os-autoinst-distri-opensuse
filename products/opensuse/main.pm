@@ -1,7 +1,7 @@
 # SUSE's openQA tests
 #
 # Copyright © 2009-2013 Bernhard M. Wiedemann
-# Copyright © 2012-2018 SUSE LLC
+# Copyright © 2012-2020 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -26,42 +26,25 @@ use utils;
 use version_utils qw(is_jeos is_gnome_next is_krypton_argon is_leap is_tumbleweed is_rescuesystem is_desktop_installed is_opensuse is_sle is_staging);
 use main_common;
 use known_bugs;
+use YuiRestClient;
+
 init_main();
 
 sub cleanup_needles {
     remove_common_needles;
-    if (!get_var("LIVECD")) {
-        unregister_needle_tags("ENV-LIVECD-1");
+    for my $distri (qw(opensuse microos)) {
+        unregister_needle_tags("ENV-DISTRI-$distri") unless check_var('DISTRI', $distri);
     }
-    else {
-        unregister_needle_tags("ENV-LIVECD-0");
+    unregister_needle_tags('ENV-LIVECD-' . (get_var('LIVECD') ? 0 : 1));
+    for my $wm (qw(mate lxqt enlightenment awesome)) {
+        remove_desktop_needles($wm) unless check_var('DE_PATTERN', $wm);
     }
-    if (!check_var("DE_PATTERN", "mate")) {
-        remove_desktop_needles("mate");
+    unregister_needle_tags('ENV-LEAP-1')             unless is_leap;
+    unregister_needle_tags('ENV-VERSION-Tumbleweed') unless is_tumbleweed;
+    for my $flavor (qw(Krypton-Live Argon-Live GNOME-Live KDE-Live XFCE-Live Rescue-CD JeOS-for-AArch64 JeOS-for-kvm-and-xen)) {
+        unregister_needle_tags("ENV-FLAVOR-$flavor") unless check_var('FLAVOR', $flavor);
     }
-    if (!check_var("DE_PATTERN", "lxqt")) {
-        remove_desktop_needles("lxqt");
-    }
-    if (!check_var("DE_PATTERN", "enlightenment")) {
-        remove_desktop_needles("enlightenment");
-    }
-    if (!check_var("DE_PATTERN", "awesome")) {
-        remove_desktop_needles("awesome");
-    }
-    if (!is_jeos) {
-        unregister_needle_tags('ENV-FLAVOR-JeOS-for-kvm');
-    }
-    if (!is_leap) {
-        unregister_needle_tags('ENV-LEAP-1');
-    }
-    if (!is_tumbleweed) {
-        unregister_needle_tags('ENV-VERSION-Tumbleweed');
-    }
-    for my $flavor (qw(Krypton-Live Argon-Live)) {
-        if (!check_var('FLAVOR', $flavor)) {
-            unregister_needle_tags("ENV-FLAVOR-$flavor");
-        }
-    }
+    unregister_needle_tags('ENV-FLAVOR-JeOS-for-kvm') unless is_jeos;
     # unregister christmas needles unless it is December where they should
     # appear. Unused needles should be disregarded by admin delete then
     unregister_needle_tags('CHRISTMAS') unless get_var('WINTER_IS_THERE');
@@ -77,14 +60,7 @@ testapi::set_distribution(DistributionProvider->provide());
 $testapi::distri->set_expected_serial_failures(create_list_of_serial_failures());
 $testapi::distri->set_expected_autoinst_failures(create_list_of_autoinst_failures());
 
-unless (get_var("DESKTOP")) {
-    if (check_var("VIDEOMODE", "text")) {
-        set_var("DESKTOP", "textmode");
-    }
-    else {
-        set_var("DESKTOP", "kde");
-    }
-}
+set_var('DESKTOP', check_var('VIDEOMODE', 'text') ? 'textmode' : 'kde') unless get_var('DESKTOP');
 
 if (check_var('DESKTOP', 'minimalx')) {
     set_var("NOAUTOLOGIN", 1);
@@ -120,10 +96,7 @@ if (check_var('DESKTOP', 'kde') && !get_var('KDE4')) {
     set_var("PLASMA5", 1);
 }
 
-# ZDUP_IN_X imply ZDUP
-if (get_var('ZDUP_IN_X')) {
-    set_var('ZDUP', 1);
-}
+set_var('ZDUP', 1) if get_var('ZDUP_IN_X');
 
 if (is_updates_test_repo && !get_var('ZYPPER_ADD_REPOS')) {
     my $repos = map_incidents_to_repo({OS => get_required_var('OS_TEST_ISSUES')}, {OS => get_required_var('OS_TEST_TEMPLATE')});
@@ -147,44 +120,28 @@ $needle::cleanuphandler = \&cleanup_needles;
 logcurrentenv(
     qw(ADDONURL BTRFS DESKTOP LIVETEST LVM
       MOZILLATEST NOINSTALL UPGRADE USBBOOT ZDUP
-      ZDUPREPOS TEXTMODE DISTRI NOAUTOLOGIN QEMUCPU QEMUCPUS RAIDLEVEL
+      ZDUPREPOS DISTRI NOAUTOLOGIN QEMUCPU QEMUCPUS RAIDLEVEL
       ENCRYPT INSTLANG QEMUVGA DOCRUN UEFI DVD GNOME KDE ISO ISO_MAXSIZE
       LIVECD NETBOOT NOIMAGES SPLITUSR VIDEOMODE)
 );
 
-return 1 if load_yaml_schedule;
+if (load_yaml_schedule) {
+    if (YuiRestClient::is_libyui_rest_api) {
+        YuiRestClient::set_libyui_backend_vars;
+        YuiRestClient::init_logger;
+    }
+    return 1;
+}
+
+return load_wicked_create_hdd if (get_var('WICKED_CREATE_HDD'));
 
 sub have_addn_repos {
     return !get_var("NET") && !get_var("EVERGREEN") && get_var("SUSEMIRROR") && !is_staging();
 }
 
-sub load_fixup_network {
-    # openSUSE 13.2's (and earlier) systemd has broken rules for virtio-net, not applying predictable names (despite being configured)
-    # A maintenance update breaking networking names sounds worse than just accepting that 13.2 -> TW breaks with virtio-net
-    # At this point, the system has been updated, but our network interface changed name (thus we lost network connection)
-    my @old_hdds = qw(openSUSE-13.1-gnome openSUSE-13.2);
-    return unless grep { check_var('HDDVERSION', $_) } @old_hdds;
-
-    loadtest "fixup/network_configuration";
-
-}
-
-sub load_fixup_firewall {
-    # The openSUSE 13.1 GNOME disk image has the firewall disabled
-    # Upon upgrading to a new system the service state is supposed to remain as pre-configured
-    # If the service is disabled here, we enable it here
-    # For the older openSUSE base images we also see a problem with the
-    # firewall being disabled since
-    # https://build.opensuse.org/request/show/483163
-    # which seems to be in openSUSE Tumbleweed since 20170413
-    return unless get_var('HDDVERSION', '') =~ /openSUSE-(13.1-gnome)/;
-    loadtest 'fixup/enable_firewall';
-}
-
 sub load_consoletests_minimal {
     return unless (is_staging() && get_var('UEFI') || is_gnome_next || is_krypton_argon);
     # Stagings should test yast2-bootloader in miniuefi at least but not all
-    loadtest "console/system_prepare";
     loadtest "console/prepare_test_data";
     loadtest "console/consoletest_setup";
     loadtest "console/textinfo";
@@ -311,33 +268,21 @@ if (is_jeos) {
 if (is_kernel_test()) {
     load_kernel_tests();
 }
-elsif (get_var("NETWORKD")) {
-    boot_hdd_image();
-    load_networkd_tests();
-}
 elsif (get_var('NFV')) {
     load_nfv_tests();
 }
+elsif (get_var("PYNFS")) {
+    loadtest "boot/boot_to_desktop";
+    load_pynfs_tests;
+}
 elsif (get_var("REGRESSION")) {
     load_common_x11;
-}
-elsif (is_mediacheck) {
-    load_svirt_vm_setup_tests;
-    loadtest "installation/mediacheck";
 }
 elsif (is_memtest) {
     if (!get_var("OFW")) {    #no memtest on PPC
         load_svirt_vm_setup_tests;
         loadtest "installation/memtest";
     }
-}
-elsif (get_var('GNUHEALTH')) {
-    boot_hdd_image;
-    loadtest 'gnuhealth/gnuhealth_install';
-    loadtest 'gnuhealth/gnuhealth_setup';
-    loadtest 'gnuhealth/gnuhealth_client_install';
-    loadtest 'gnuhealth/gnuhealth_client_preconfigure';
-    loadtest 'gnuhealth/gnuhealth_client_first_time';
 }
 elsif (is_rescuesystem) {
     loadtest "installation/rescuesystem";
@@ -347,6 +292,9 @@ elsif (get_var("SUPPORT_SERVER")) {
     loadtest "support_server/boot";
     loadtest "support_server/login";
     loadtest "support_server/setup";
+    loadtest "support_server/meddle_multipaths" if (get_var("SUPPORT_SERVER_TEST_INSTDISK_MULTIPATH"));
+    loadtest "support_server/custom_pxeboot"    if (get_var("SUPPORT_SERVER_PXE_CUSTOMKERNEL"));
+    loadtest "support_server/flaky_mp_iscsi"    if (get_var("ISCSI_MULTIPATH_FLAKY"));
     unless (load_slenkins_tests()) {    # either run the slenkins control node or just wait for connections
         loadtest "support_server/wait_children";
     }
@@ -365,17 +313,6 @@ elsif (get_var('CPU_BUGS')) {
 elsif (get_var('SECURITY_TEST')) {
     prepare_target();
     load_security_tests;
-}
-elsif (get_var('SYSTEMD_TESTSUITE')) {
-    if (!get_var('BOOT_HDD_IMAGE')) {
-        load_boot_tests();
-        load_inst_tests();
-        load_reboot_tests();
-    }
-    load_systemd_patches_tests;
-}
-elsif (get_var('AUTOFS')) {
-    load_mm_autofs_tests;
 }
 else {
     if (get_var("LIVETEST") || get_var('LIVE_INSTALLATION') || get_var('LIVE_UPGRADE')) {
@@ -417,15 +354,6 @@ else {
         loadtest "remote/remote_target";
         load_reboot_tests();
     }
-    elsif (is_jeos) {
-        load_boot_tests();
-        loadtest "jeos/firstrun";
-        loadtest "console/force_scheduled_tasks";
-        loadtest "jeos/diskusage";
-        if (get_var("SCC_EMAIL") && get_var("SCC_REGCODE")) {
-            loadtest "jeos/sccreg";
-        }
-    }
     else {
         return 1 if load_default_tests;
     }
@@ -437,8 +365,7 @@ else {
         || load_otherDE_tests()
         || load_slenkins_tests())
     {
-        load_fixup_network();
-        load_fixup_firewall();
+        loadtest "console/system_prepare";
         load_system_update_tests();
         load_rescuecd_tests();
         if (consolestep_is_applicable) {

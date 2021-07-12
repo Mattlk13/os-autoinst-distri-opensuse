@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright © 2017-2019 SUSE LLC
+# Copyright © 2017-2020 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -12,7 +12,7 @@
 # - Select OK and reboot system
 # - Keep console and reconnect VNC, unless DESKTOP is minimalx and shutdown
 # timeouts
-# Maintainer: Oliver Kurz <okurz@suse.de>
+# Maintainer: QE LSG <qa-team@suse.de>
 
 use base 'y2_installbase';
 use strict;
@@ -22,7 +22,8 @@ use testapi;
 use utils;
 use mmapi;
 use power_action_utils 'power_action';
-use Utils::Backends 'has_ttys';
+use Utils::Backends qw(is_pvm has_ttys);
+use YuiRestClient;
 
 sub run {
     select_console 'installation' unless get_var('REMOTE_CONTROLLER');
@@ -63,6 +64,7 @@ sub run {
         # socket end
         send_key 'alt-o';
     }
+
     if (get_var('USE_SUPPORT_SERVER') && get_var('USE_SUPPORT_SERVER_PXE_CUSTOMKERNEL')) {
         # "Press ESC for boot menu"
         # Expected: match in about 5 seconds

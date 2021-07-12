@@ -1,4 +1,4 @@
-# Copyright (C) 2017-2020 SUSE LLC
+# Copyright (C) 2017-2021 SUSE LLC
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -23,9 +23,10 @@ use warnings;
 
 use testapi;
 use utils;
+use zypper;
 use registration;
 use qam 'remove_test_repositories';
-use version_utils qw(is_sle is_sles4sap);
+use version_utils qw(is_sle is_sles4sap is_leap_migration);
 
 our @EXPORT = qw(
   setup_sle
@@ -36,7 +37,6 @@ our @EXPORT = qw(
   record_disk_info
   check_rollback_system
   reset_consoles_tty
-  boot_into_ro_snapshot
   set_scc_proxy_url
 );
 
@@ -45,17 +45,19 @@ sub setup_sle {
 
     # Stop packagekitd
     if (is_sle('12+')) {
-        pkcon_quit;
+        quit_packagekit;
     }
     else {
         assert_script_run "chmod 444 /usr/sbin/packagekitd";
     }
 
+    # poo#87850 wait the zypper processes in background to finish and release the lock.
+    wait_quit_zypper;
     # Change serial dev permissions
     ensure_serialdev_permissions;
 
     # Enable Y2DEBUG for error debugging
-    type_string "echo 'export Y2DEBUG=1' >> /etc/bash.bashrc.local\n";
+    enter_cmd "echo 'export Y2DEBUG=1' >> /etc/bash.bashrc.local";
     script_run "source /etc/bash.bashrc.local";
 }
 
@@ -74,7 +76,7 @@ sub register_system_in_textmode {
     # so set SMT_URL here if register system via smt server
     # otherwise must register system via real SCC before online migration
     if (my $u = get_var('SMT_URL')) {
-        type_string "echo 'url: $u' > /etc/SUSEConnect\n";
+        enter_cmd "echo 'url: $u' > /etc/SUSEConnect";
     }
 
     # register system and addons in textmode for all archs
@@ -121,9 +123,10 @@ sub remove_ltss {
 # Disable installation repos before online migration
 # s390x: use ftp remote repos as installation repos
 # Other archs: use local DVDs as installation repos
+# https://documentation.suse.com/sles/15-SP2/html/SLES-all/cha-upgrade-online.html#sec-upgrade-online-zypper
 sub disable_installation_repos {
     if (check_var('ARCH', 's390x')) {
-        zypper_call "mr -d `zypper lr -u | awk '/ftp:.*?openqa.suse.de/ {print \$1}'`";
+        zypper_call "mr -d `zypper lr -u | awk '/ftp:.*?openqa.suse.de|10.160.0.100/ {print \$1}'`";
     }
     else {
         zypper_call "mr -d -l";
@@ -137,7 +140,9 @@ sub record_disk_info {
     if ($out =~ /btrfs/) {
         assert_script_run 'btrfs filesystem df / | tee /tmp/btrfs-filesystem-df.txt';
         assert_script_run 'btrfs filesystem usage / | tee /tmp/btrfs-filesystem-usage.txt';
-        assert_script_run 'snapper list | tee /tmp/snapper-list.txt' unless (is_sles4sap());
+        # we can use disable-used-space option to make 'snapper list' faster, if it has that option.
+        assert_script_run("(snapper --help | grep -q -- --disable-used-space && snapper list --disable-used-space || snapper list) | tee /tmp/snapper-list.txt", 180) unless (is_sles4sap());
+
         upload_logs '/tmp/btrfs-filesystem-df.txt';
         upload_logs '/tmp/btrfs-filesystem-usage.txt';
         upload_logs '/tmp/snapper-list.txt' unless (is_sles4sap());
@@ -155,24 +160,28 @@ sub check_rollback_system {
         base_version=\$(echo \$version | cut -d'-' -f1)
         zypper lr | cut -d'|' -f3 | gawk '/SLE/ || /openSUSE/' | sed \"/\$version\\|Module.*\$base_version/d\"
     ", 100);
-    record_info('Incorrect Repos', $incorrect_repos, result => 'fail') if $incorrect_repos;
+    # for leap to sle migration, we'll have SLE-$VERSION-Updates in the leap repo.
+    if ($incorrect_repos) {
+        record_info('Incorrect Repos', $incorrect_repos, result => 'fail') unless (is_leap_migration && $incorrect_repos eq 'SLE-' . get_var("VERSION") . '-Updates');
+    }
 
     return unless is_sle;
     # Check SUSEConnect status for SLE
     # check rollback-helper service is enabled and worked properly
     # If rollback service is activating, need wait some time
-    # Add wait in a loop, max time is 5 minute, because case with much more modules need more time
-    for (1 .. 5) {
+    # Add wait in a loop, max time is 10 minute, because case with much more modules need more time
+    for (1 .. 10) {
         last unless script_run('systemctl --no-pager status rollback') != 0;
         sleep 60;
     }
     systemctl('is-active rollback');
 
-    # Disable the obsolete cd and dvd repos to avoid zypper error
-    zypper_call("mr -d -m cd -m dvd");
     # Verify registration status matches current system version
     # system is un-registered during media based upgrade
-    assert_script_run('curl -s ' . data_url('console/check_registration_status.py') . ' | python') unless get_var('MEDIA_UPGRADE');
+    unless (get_var('MEDIA_UPGRADE')) {
+        my $py = (-e '/usr/bin/python3') ? 'python3' : 'python';
+        assert_script_run('curl -s ' . data_url('console/check_registration_status.py') . ' | ' . $py);
+    }
 }
 
 # Reset tty for x11 and root consoles
@@ -182,31 +191,10 @@ sub reset_consoles_tty {
     reset_consoles;
 }
 
-# Assert read-only snapshot before migrated
-# Assert screen 'linux-login' with 200s
-# Workaround known issue: bsc#980337
-# In this case try to select tty1 with multi-times then select root console
-sub boot_into_ro_snapshot {
-    unlock_if_encrypted(check_typed_password => 1);
-    if (!check_screen('linux-login', 200)) {
-        record_soft_failure 'bsc#980337';
-        for (1 .. 10) {
-            check_var('VIRSH_VMM_FAMILY', 'hyperv') ? send_key 'alt-f1' : send_key 'ctrl-alt-f1';
-            if (check_screen('tty1-selected', 12)) {
-                return 1;
-            }
-            else {
-                record_info('not in tty1', 'switch to tty1 failed', result => 'softfail');
-            }
-        }
-        die "Boot into read-only snapshot failed over 5 minutes, considering a product issue";
-    }
-}
-
 # Register the already installed system on a specific SCC server/proxy if needed
 sub set_scc_proxy_url {
     if (my $u = get_var('SCC_PROXY_URL')) {
-        type_string "echo 'url: $u' > /etc/SUSEConnect\n";
+        enter_cmd "echo 'url: $u' > /etc/SUSEConnect";
     }
     save_screenshot;
 }

@@ -7,6 +7,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: steamcmd
 # Summary: Run steamcmd to bootstrap a game server
 #   see https://developer.valvesoftware.com/wiki/SteamCMD for reference,
 #   https://developer.valvesoftware.com/wiki/Dedicated_Servers_List#Linux_Dedicated_Servers
@@ -24,9 +25,12 @@ sub run {
     zypper_call('in --auto-agree-with-licenses steamcmd');
     # see https://github.com/ValveSoftware/steam-for-linux/issues/4341
     my $allow_exit_codes = [qw(0 6 7 8)];
-    # /usr/bin/steamcmd currently does not forward arguments, see
-    # https://build.opensuse.org/request/show/592657
-    my $ret = script_run '/usr/lib/steamcmd/steamcmd.sh +login anonymous +app_update 90 validate +quit', 1200;
+    my $ret = script_run '/usr/bin/steamcmd +login anonymous +app_update 90 validate +quit', 1200;
+    if ($ret == 8) {
+        # Steam bug: HL needs multiple download attempts:
+        # https://developer.valvesoftware.com/wiki/SteamCMD#Downloading_an_app
+        $ret = script_run '/usr/bin/steamcmd +login anonymous +app_update 90 validate +quit', 1200;
+    }
     die "'steamcmd' failed with exit code $ret" unless (grep { $_ == $ret } @$allow_exit_codes);
     assert_script_run 'test -f Steam/steamapps/common/Half-Life/hlds_run';
 }

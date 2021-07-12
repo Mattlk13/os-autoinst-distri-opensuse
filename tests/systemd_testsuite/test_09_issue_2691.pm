@@ -15,7 +15,6 @@ use warnings;
 use strict;
 use testapi;
 use power_action_utils 'power_action';
-use utils 'get_root_console_tty';
 
 sub pre_run_hook {
     my ($self) = @_;
@@ -25,24 +24,9 @@ sub pre_run_hook {
 
 sub run {
     #run test
-    type_string 'systemctl start testsuite.service';
-    send_key 'ret';
-    type_string 'systemctl status testsuite.service';
-    send_key 'ret';
-    #this test run needs a reboot
-    power_action('reboot', keepconsole => 1, textmode => 1);
-    wait_still_screen 20;
-    #login
-    my $tty = get_root_console_tty;
-    send_key_until_needlematch('tty$tty-selected', 'ret', 360, 5);
-    type_string "root\n";
-    assert_screen("password-prompt");
-    type_password;
-    send_key('ret');
-    assert_screen "text-logged-in-root";
-    assert_script_run 'cd /var/opt/systemd-tests';
-    assert_script_run 'ls -l /shutdown-log.txt';
-    assert_script_run './run-tests.sh TEST-09-ISSUE-2691 --run 2>&1 | tee /tmp/testsuite.log', 60;
+    my $timeout = 300;
+    assert_script_run 'cd /usr/lib/systemd/tests';
+    assert_script_run './run-tests.sh TEST-09-ISSUE-2691 --run 2>&1 | tee /tmp/testsuite.log', $timeout;
     assert_script_run 'grep "PASS: ...TEST-09-ISSUE-2691" /tmp/testsuite.log';
 }
 

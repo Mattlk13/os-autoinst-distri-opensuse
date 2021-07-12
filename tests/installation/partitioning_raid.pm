@@ -125,7 +125,7 @@ sub addraid {
         send_key $cmd{next};
     }
     assert_screen 'partition-role';
-    send_key "alt-o";        # Operating System
+    send_key "alt-o";    # Operating System
     wait_screen_change { send_key $cmd{next} };
 }
 
@@ -500,7 +500,13 @@ sub check_warnings {
 sub enter_partitioning {
     # create partitioning
     if (is_storage_ng) {
-        send_key $cmd{expertpartitioner};
+        if (check_screen 'expert-partitioner-alt-x-button', 2) {
+            # bypass https://progress.opensuse.org/issues/59876
+            send_key 'alt-x';
+        }
+        else {
+            send_key $cmd{expertpartitioner};
+        }
         save_screenshot;
         rescan_devices;
     }
@@ -513,9 +519,9 @@ sub enter_partitioning {
         assert_screen 'custompart_option-selected';
         send_key $cmd{next};
     }
-    assert_screen 'custompart';    # verify available storage
+    assert_screen 'custompart';                               # verify available storage
     send_key "tab";
-    assert_screen 'custompart_systemview-selected';    # select system (hostname) on System View
+    assert_screen 'custompart_systemview-selected';           # select system (hostname) on System View
     send_key "down";
     assert_screen 'partitioning_raid-hard_disks-selected';    # select Hard Disks on System View
 }

@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright © 2019 SUSE LLC
+# Copyright © 2020 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -19,7 +19,7 @@ use strict;
 use warnings;
 
 sub install_service {
-    zypper_call('in apache2');
+    zypper_call('in apache2 apache2-utils');
 }
 
 sub enable_service {
@@ -39,7 +39,7 @@ sub check_service {
 # check httpd function
 sub check_function {
     # verify httpd serves index.html
-    type_string "echo Lorem ipsum dolor sit amet > /srv/www/htdocs/index.html\n";
+    enter_cmd "echo Lorem ipsum dolor sit amet > /srv/www/htdocs/index.html";
     assert_script_run(
         "curl -f http://localhost/ | grep 'Lorem ipsum dolor sit amet'",
         timeout      => 90,
@@ -50,14 +50,17 @@ sub check_function {
 # check apache service before and after migration
 # stage is 'before' or 'after' system migration.
 sub full_apache_check {
-    my ($stage) = @_;
-    $stage //= '';
+    my (%hash) = @_;
+    my $stage  = $hash{stage};
+    my $type   = $hash{service_type};
+    my $pkg    = $hash{srv_pkg_name};
     if ($stage eq 'before') {
         install_service();
-        enable_service();
-        start_service();
+        common_service_action($pkg, $type, 'enable');
+        common_service_action($pkg, $type, 'start');
     }
-    check_service();
+    common_service_action($pkg, $type, 'is-enabled');
+    common_service_action($pkg, $type, 'is-active');
     check_function();
 }
 

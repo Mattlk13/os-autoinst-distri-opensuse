@@ -52,7 +52,7 @@ case $PROVIDER in
         aws ec2 reboot-instances  --instance-ids "$INSTANCE_ID"
         ;;
     AZURE)
-        az vm restart -g "$INSTANCE_ID" -n "$INSTANCE_ID" --no-wait
+        az vm restart --ids "$INSTANCE_ID" --no-wait
         ;;
     GCE)
         gcloud compute instances reset "$INSTANCE_ID" --zone "$ZONE"
@@ -66,5 +66,8 @@ esac
 wait_for_power_off "$HOST" "$CNT"
 wait_for_power_on "$HOST" "$CNT"
 echo "Instance $INSTANCE_ID restarted";
-test -x $LOG_SCRIPT && $LOG_SCRIPT start "$PROVIDER" "$INSTANCE_ID" "$HOST" "$ZONE"
+## Not needed, because the log_instance.sh does not depend on the running instance
+## Leaving it here in case we need to revert it. If no issues arise, this can be
+## removed after some time.
+#test -x $LOG_SCRIPT && $LOG_SCRIPT start "$PROVIDER" "$INSTANCE_ID" "$HOST" "$ZONE"
 

@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright © 2019 SUSE LLC
+# Copyright © 2019-2020 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -21,6 +21,7 @@ use lockapi;
 use utils;
 use Data::Dumper;
 use Mojo::JSON;
+use version_utils 'is_sle';
 
 ## TODO: provide better parser for HPC specific tests
 sub validate_result {
@@ -128,7 +129,7 @@ sub run_basic_tests {
     my %test04 = t04_basic();
     push(@all_results, \%test04);
 
-    if (get_required_var('VERSION') =~ m/15-SP2/) {
+    if (is_sle('>15-SP2')) {
         my %test05 = t05_basic();
         push(@all_results, \%test05);
     }
@@ -138,6 +139,9 @@ sub run_basic_tests {
 
     my %test07 = t07_basic();
     push(@all_results, \%test07);
+
+    my %test08 = t08_basic();
+    push(@all_results, \%test08);
 
     return @all_results;
 }
@@ -214,7 +218,7 @@ sub t04_basic {
 }
 
 sub t05_basic {
-    my $name        = 'PMIx Support in SLURM and the MPI Libraries';
+    my $name        = 'PMIx Support in SLURM';
     my $description = 'Basic check if pmix is present. https://jira.suse.com/browse/SLE-10802';
     my $result      = 0;
 
@@ -244,6 +248,28 @@ sub t07_basic {
 
     ##TODO: remove hardcoded slaves
     my $result = script_run("srun -w slave-node00,slave-node01 date");
+
+    my %results = generate_results($name, $description, $result);
+    return %results;
+}
+
+sub t08_basic {
+    my $name        = 'pdsh-slurm';
+    my $description = 'Basic check of pdsh-slurm over ssh';
+    my $result      = 0;
+
+    zypper_call('in pdsh pdsh-slurm');
+
+    my $sinfo_nodeaddr = script_output('sinfo -a --Format=nodeaddr -h');
+    my $pdsh_nodes     = script_output('pdsh -R ssh -P normal /usr/bin/hostname');
+    my @sinfo_nodeaddr = (split ' ', $sinfo_nodeaddr);
+
+    foreach my $i (@sinfo_nodeaddr) {
+        if (index($pdsh_nodes, $i) == -1) {
+            $result = 1;
+            last;
+        }
+    }
 
     my %results = generate_results($name, $description, $result);
     return %results;
@@ -279,7 +305,6 @@ sub t01_accounting {
     script_run("useradd $users{user_3}");
     script_run("useradd $users{user_4}");
 
-    script_run('sacctmgr -i add cluster linux');
     my $cluster = script_output('sacctmgr -n -p list cluster');
 
     if (index($cluster, 'linux') == -1) {
@@ -423,26 +448,24 @@ sub run_accounting_ha_tests {
     return @all_results;
 }
 
-###############################################
-##        Extended tests for HPC cluster     ##
-##          Meant as fast moving tests       ##
-###############################################
+########################################################
+##        Extended&External tests for HPC             ##
+##          Meant as fast moving tests                ##
+########################################################
 
 sub extended_hpc_tests {
-    #install some tools needed for extended tests
-    zypper_call('in git gcc bc');
+    my ($master_ip, $slave_ip) = @_;
 
-    #ensure HPC cluster installs needed rpms
-    zypper_call('in openmpi3-gnu-hpc openmpi3-gnu-hpc-devel bc openmpi3-devel');
-    zypper_call('in hypre_*-gnu-*-hpc* cpuid papi_*-hpc boost_*-gnu-hpc gsl_*-gnu-hpc petsc_*-gnu-*-hpc*');
-    script_run('export LD_LIBRARY_PATH=\$LD_LIBRARY_PATH:/usr/lib64/mpi/gcc/openmpi3/lib64/');
-    script_run('wget --quiet ' . data_url('hpc/simple_mpi.c') . ' -O /tmp/simple_mpi.c');
-    script_run('/usr/lib64/mpi/gcc/openmpi3/bin/mpicc /tmp/simple_mpi.c -o /tmp/simple_mpi | tee /tmp/make.out');
-    script_run('git clone https://github.com/schlad/havoxc_binary.git');
-    script_run('cd havoxc_binary');
-    script_run('wget --quiet ' . data_url('hpc/julog.sh') . ' -O julog.sh');
-    script_run('./havoxc.so');
-    parse_extra_log('XUnit', './results/TEST-havoxc_so.xml');
+    # do all test preparations and setup
+    zypper_ar(get_required_var('DEVEL_TOOLS_REPO'), no_gpg_check => 1);
+    zypper_call('in git-core twopence-shell-client bc iputils python');
+    assert_script_run('git -c http.sslVerify=false clone https://github.com/schlad/hpc-testing.git --branch HPC');
+
+    #execute tests
+    assert_script_run('cd hpc-testing');
+    record_info('DEBUG3', "$slave_ip");
+    assert_script_run("./hpc-test.sh $master_ip $slave_ip --in-vm -v", 360);
+    parse_extra_log('XUnit', './results/TEST-hpc-test.xml');
 }
 
 sub run {
@@ -502,7 +525,11 @@ sub run {
     # stability; use at your own risk
 
     if (get_required_var('EXT_HPC_TESTS')) {
-        extended_hpc_tests();
+        #hpc-testing gets IPs as args
+        my $master_ip = $self->get_master_ip();
+        my $slave_ip  = $self->get_slave_ip();
+        record_info('DEBUG2', "$slave_ip");
+        extended_hpc_tests($master_ip, $slave_ip);
     } else {
         run_tests($slurm_conf);
     }
@@ -520,7 +547,8 @@ sub post_fail_hook {
     $self->upload_service_log('slurmd');
     $self->upload_service_log('munge');
     $self->upload_service_log('slurmctld');
-    $self->upload_service_log('slurmdbd');
+    $self->export_logs_basic;
+    $self->get_remote_logs('slave-node02', 'slurmdbd.log');
     upload_logs('/var/log/slurmctld.log');
 }
 

@@ -24,7 +24,7 @@ use warnings;
 use testapi;
 use mm_network;
 
-our @EXPORT = qw(setup_static_network recover_network can_upload_logs iface ifc_exists ifc_is_up);
+our @EXPORT = qw(setup_static_network recover_network can_upload_logs iface ifc_exists ifc_is_up genmac);
 
 =head2 setup_static_network
 
@@ -47,7 +47,8 @@ sub setup_static_network {
     assert_script_run qq(echo -e "\\nSTARTMODE='auto'\\nBOOTPROTO='static'\\nIPADDR='$args{ip}'">/etc/sysconfig/network/ifcfg-$iface);
     assert_script_run 'rcnetwork restart';
     assert_script_run 'ip addr';
-    assert_script_run 'ping -c 1 ' . $args{gw} . '|| journalctl -b --no-pager > /dev/' . $serialdev;
+    assert_script_run 'ping -c 1 ' . $args{gw} . '|| journalctl -b --no-pager -o short-precise > /dev/' . $serialdev;
+    assert_script_run('ip -6 addr add ' . $args{ipv6} . ' dev ' . $iface) if (exists($args{ipv6}));
 }
 
 =head2 iface
@@ -80,8 +81,8 @@ sub can_upload_logs {
 
  recover_network([ip => $ip] [, gw => $gw]);
 
-Recover network with static config if is feasible, returns if can ping GW. 
-Main use case is post_fail_hook, to be able to upload logs. 
+Recover network with static config if is feasible, returns if can ping GW.
+Main use case is post_fail_hook, to be able to upload logs.
 
 Accepts following parameters :
 
@@ -134,6 +135,24 @@ Return only if network status is UP.
 sub ifc_is_up {
     my ($ifc) = @_;
     return !script_run("ip link show dev $ifc | grep 'state UP'");
+}
+
+=head2 genmac
+
+Generate custom MAC address.
+Used for Xen domU testing, to define MAC address once for whole test suite lifecycle.
+
+ genmac(['aa:bb:cc'])
+
+=cut
+
+sub genmac {
+    my @mac = split(/:/, shift);
+    my $len = scalar(@mac);
+    for (my $i = 0; $i < (6 - $len); $i++) {
+        push @mac, (sprintf("%02X", int(rand(254))));
+    }
+    return lc(join(':', @mac));
 }
 
 1;

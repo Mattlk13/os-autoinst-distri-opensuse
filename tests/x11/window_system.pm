@@ -7,6 +7,7 @@
 # notice and this notice are preserved. This file is offered as-is,
 # without any warranty.
 
+# Package: systemd
 # Summary: Show information about current session (window system)
 # - Check current session type
 # - Select graphic console (x11), unless DESKTOP is set to textmode
@@ -29,10 +30,8 @@ sub run {
     if ($session_type) {
         record_info("$session_type", "Current session type is $session_type");
     } else {
-        record_soft_fail("Session type is not defined");
+        die('Session type is not defined');
     }
-
-    type_string "exit\n";    # logout
 
     select_console 'x11' unless check_var('DESKTOP', 'textmode');
 }

@@ -8,6 +8,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: systemd util-linux-systemd
 # Summary: Test to check that the logs with the custom error level are inserted
 # in the journal
 # Maintainer: Ivan Lausuch <ilausuch@suse.de>
@@ -20,7 +21,7 @@ use warnings;
 
 sub run {
     my $self = shift;
-    select_console 'root-console';
+    $self->select_serial_terminal;
 
     record_info("INFO", "Logs all level0 severity types");
     assert_script_run "wget --quiet " . data_url('journalctl_levels/test.sh') . " -O test.sh";

@@ -20,6 +20,8 @@ use Data::Dumper;
 use XML::Writer;
 use IO::File;
 use virt_utils;
+use Utils::Architectures;
+use upload_system_log;
 
 sub analyzeResult {
     die "You need to overload analyzeResult in your class";
@@ -85,29 +87,95 @@ sub generateXML {
     generateXML_from_data($data, \%xmldata);
 }
 
+sub save_test_configuration {
+    my ($self, $assert_pattern, $add_junit_log_flag, $upload_virt_log_flag, $log_dir, $compressed_log_name, $upload_guest_assets_flag) = @_;
+
+    $self->{assert_pattern}           = $assert_pattern;
+    $self->{add_junit_log_flag}       = $add_junit_log_flag;
+    $self->{upload_virt_log_flag}     = $upload_virt_log_flag;
+    $self->{log_dir}                  = $log_dir;
+    $self->{compressed_log_name}      = $compressed_log_name;
+    $self->{upload_guest_assets_flag} = $upload_guest_assets_flag;
+}
+
+#This is the subroutine called inside post_execute_script_run. It aims to do configurations have to be done after script
+#execution but before test assertion, for example, modifying boot options, communicating to peer with lock/unlcok and many other
+#things as long as they should be done and need to be done right after test execution or the following test steps may malfunction
+#without them. post_execute_script_configuration should be overriden in individual test modules.
+sub post_execute_script_configuration {
+    diag("You need to override this function post_execute_script_config in your test module");
+}
+
+#This is the subroutine called inside post_execute_script_run. This is introduced to faciliate tests that do not have or not convenient
+#to use assert pattern,  can not use directly returned output from execute_script_run or needs more customized way to manipuluate results.
+#So individual test modules can also have more control over how their test results should be extracted out, intead of just relying on a
+#singel assert pattern. post_execute_script_assertion needs to be overriden in individual test modules.
+sub post_execute_script_assertion {
+    diag("You need to override this function post_execute_script_assertion in your test module");
+}
+
+#This subroutine incorporates operations needs to be done after finishing executing script. It is further dividied into three parts,
+#including post_execute_script_configuration, upload_virt_logs and do test assertion. Test assertion can be done in two ways by using
+#assert pattern or newly introduced post_execute_script_assertion subroutine, the latter is only used when $assert_pattern is not provided
+#by individual test module to run_test
+sub post_execute_script_run {
+    my $self = shift;
+
+    $self->post_execute_script_configuration;
+
+    if ($self->{upload_virt_log_flag} eq "yes") {
+        upload_virt_logs($self->{log_dir}, $self->{compressed_log_name});
+    }
+    save_screenshot;
+
+    my $output = $self->{script_output};
+    if ($self->{assert_pattern}) {
+        diag("Going to do assertion after test. Use assert pattern: $self->{assert_pattern} provided by test module.");
+        unless ($output =~ /$self->{assert_pattern}/m) {
+            assert_script_run("grep -E \"$self->{assert_pattern}\" $self->{log_dir} -r || zcat /tmp/$self->{compressed_log_name}.tar.gz | grep -aE \"$self->{assert_pattern}\"");
+        }
+    }
+    else {
+        diag("Going to do assertion after test. Call post_execute_script_assertion because assert pattern is not available.");
+        $self->post_execute_script_assertion;
+    }
+    save_screenshot;
+}
+
+#Adding junit log and uploading guest assets are wrapped up here in newly introduced subroutine post_run_test.
+#This is called after post_execute_script_run in run_test if test passes or in post_fail_hook if test fails.
+sub post_run_test {
+    my $self = shift;
+
+    if ($self->{add_junit_log_flag} eq "yes") {
+        $self->add_junit_log($self->{script_output});
+    }
+
+    if ($self->{upload_guest_assets_flag} eq "yes") {
+        record_info('Check UPLOAD_GUEST_ASSETS flag', 'This test should upload guest assets!');
+        $self->upload_guest_assets;
+    }
+}
+
 sub execute_script_run {
     my ($self, $cmd, $timeout) = @_;
     my $pattern = "CMD_FINISHED-" . int(rand(999999));
-
     if (!$timeout) {
         $timeout = 10;
     }
 
-    type_string "(" . $cmd . "; echo $pattern) 2>&1 | tee -a /dev/$serialdev\n";
-    my $ret = wait_serial($pattern, $timeout);
-
+    enter_cmd "(" . $cmd . "; echo $pattern) 2>&1 | tee -a /dev/$serialdev";
+    $self->{script_output} = wait_serial($pattern, $timeout);
     save_screenshot;
 
-    if ($ret) {
-        save_screenshot;
-        $ret =~ s/[\r\n]+$pattern[\r\n]+//g;
-        return $ret;
-    }
-    else {
+    if (!$self->{script_output} or !defined $self->{script_output}) {
         save_screenshot;
         die "Timeout due to cmd run :[" . $cmd . "]\n";
     }
-
+    else {
+        save_screenshot;
+        $self->{script_output} =~ s/[\r\n]+$pattern[\r\n]+//g;
+    }
 }
 
 sub push_junit_log {
@@ -126,33 +194,16 @@ sub run_test {
 
     my $test_cmd = $self->get_script_run();
     #FOR S390X LPAR
-    if (check_var('ARCH', 's390x')) {
+    if (is_s390x) {
         virt_utils::lpar_cmd("$test_cmd");
         return;
     }
 
-    my $script_output = $self->execute_script_run($test_cmd, $timeout);
-
-    if ($add_junit_log_flag eq "yes") {
-        $self->add_junit_log($script_output);
-    }
-
-    if ($upload_virt_log_flag eq "yes") {
-        upload_virt_logs($log_dir, $compressed_log_name);
-        virt_utils::upload_supportconfig_log;
-    }
-
-    if ($upload_guest_assets_flag eq "yes") {
-        record_info('Check UPLOAD_GUEST_ASSETS flag', 'This test should upload guest assets!');
-        $self->upload_guest_assets;
-    }
-
-    if ($assert_pattern) {
-        unless ($script_output =~ /$assert_pattern/m) {
-            assert_script_run("grep -E \"$assert_pattern\" $log_dir -r || zcat /tmp/$compressed_log_name.tar.gz | grep -aE \"$assert_pattern\"");
-        }
-    }
-
+    $self->save_test_configuration($assert_pattern, $add_junit_log_flag, $upload_virt_log_flag, $log_dir, $compressed_log_name, $upload_guest_assets_flag);
+    $self->execute_script_run($test_cmd, $timeout);
+    $self->post_execute_script_run;
+    $self->post_run_test;
+    save_screenshot;
 }
 
 sub add_junit_log {
@@ -202,5 +253,36 @@ sub upload_guest_assets {
     }
 }
 
+sub post_fail_hook {
+    my ($self) = shift;
+
+    #FOR S390X LPAR
+    if (is_s390x) {
+        #collect and upload supportconfig log from S390X LPAR
+        upload_system_log::upload_supportconfig_log();
+        script_run "rm -rf scc_*";
+        return;
+    }
+
+    $self->post_run_test;
+    save_screenshot;
+
+    if (get_var('VIRT_PRJ1_GUEST_INSTALL')) {
+        #collect and upload guest autoyast control files
+        assert_script_run "cp -r /srv/www/htdocs/install/autoyast /guest_autoyast_files";
+        virt_utils::collect_host_and_guest_logs('', '/guest_autoyast_files', '');
+        assert_script_run "rm -rf /guest_autoyast_files";
+    }
+    elsif (get_var("VIRT_PRJ2_HOST_UPGRADE")) {
+        virt_utils::collect_host_and_guest_logs('', '/root/autoupg.xml', '');
+    }
+    else {
+        virt_utils::collect_host_and_guest_logs;
+    }
+    save_screenshot;
+
+    $self->upload_coredumps;
+    save_screenshot;
+}
 1;
 

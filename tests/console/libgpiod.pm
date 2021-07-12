@@ -3,6 +3,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: libgpiod
 # Summary: Test libgpiod
 #  More information can be found on https://en.opensuse.org/openSUSE:GPIO
 # Maintainer: Guillaume Gardet <guillaume@opensuse.org>
@@ -12,6 +13,8 @@ use strict;
 use warnings;
 use testapi;
 use utils;
+use Utils::Architectures qw(is_aarch64 is_arm);
+use version_utils qw(is_sle is_leap);
 
 sub run {
     select_console 'root-console';
@@ -22,11 +25,23 @@ sub run {
     # Record libgpiod version
     record_info('Version', script_output('gpiodetect --version | head -n1'));
 
-    # ARM qemu has already gpiochip0 [ARMH0061:00] (8 lines) for ACPI
-    my $gpiochipX = get_var('ARCH') =~ /aarch64/ ? 'gpiochip1' : 'gpiochip0';
+    # ARM qemu _may_ have already gpiochip0 [ARMH0061:00] (8 lines) for ACPI (depends on qemu version)
+    my $gpiochipX = 'gpiochip0';
+    if (script_run('gpioinfo | grep gpiochip0') == 0) {
+        $gpiochipX = 'gpiochip1';
+        # Some boards (RPi3/4) have 2 gpiochips already
+        if (script_run('gpioinfo | grep gpiochip1') == 0) {
+            $gpiochipX = 'gpiochip2';
+        }
+    }
 
     record_info('gpiochip', "$gpiochipX");
 
+    my $version = get_var('VERSION', '');
+    if (is_sle || is_leap('>15.2') || $version =~ /^Jump/) {
+        record_info('kernel extra', 'boo#1176090 install kernel-default-extra');
+        zypper_call 'in kernel-default-extra';
+    }
     # Create a fake $gpiochipX, with 32 lines
     assert_script_run("modprobe gpio_mockup gpio_mockup_ranges=-1,32");
     # Check that $gpiochipX is found, with 32 lines

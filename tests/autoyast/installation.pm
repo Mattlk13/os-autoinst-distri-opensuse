@@ -1,4 +1,4 @@
-# Copyright (C) 2015-2019 SUSE Linux GmbH
+# Copyright © 2015-2021 SUSE LLC
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -40,19 +40,20 @@ use base 'y2_installbase';
 use testapi;
 use utils;
 use power_action_utils 'prepare_system_shutdown';
-use version_utils qw(is_sle is_caasp is_released);
+use version_utils qw(is_sle is_microos is_released is_upgrade);
 use main_common 'opensuse_welcome_applicable';
 use x11utils 'untick_welcome_on_next_startup';
 use Utils::Backends 'is_pvm';
 use scheduler 'get_test_suite_data';
+use autoyast 'test_ayp_url';
+use y2_logs_helper qw(upload_autoyast_profile upload_autoyast_schema);
+use validate_encrypt_utils "validate_encrypted_volume_activation";
 
 my $confirmed_licenses = 0;
 my $stage              = 'stage1';
 my $maxtime            = 2000 * get_var('TIMEOUT_SCALE', 1);    #Max waiting time for stage 1
 my $check_time         = 50;                                    #Period to check screen during stage 1 and 2
 
-# Downloading updates takes long time
-$maxtime = 5500 if is_caasp('qam');
 # Full install with updates can take extremely long time
 $maxtime = 5500 * get_var('TIMEOUT_SCALE', 1) if is_released;
 
@@ -72,18 +73,6 @@ sub save_and_upload_stage_logs {
     # save_y2logs is not present
     assert_script_run "tar czf /tmp/logs-stage.tar.bz2 /var/log";
     upload_logs "/tmp/logs-stage1-error$i.tar.bz2";
-}
-
-sub upload_autoyast_profile {
-    # Upload autoyast profile if file exists
-    if (script_run '! test -e /tmp/profile/autoinst.xml') {
-        upload_logs '/tmp/profile/autoinst.xml';
-    }
-    # Upload modified profile if pre-install script uses this feature
-    if (script_run '! test -e /tmp/profile/modified.xml') {
-        upload_logs '/tmp/profile/modified.xml';
-    }
-    save_screenshot;
 }
 
 sub handle_expected_errors {
@@ -128,15 +117,17 @@ sub verify_timeout_and_check_screen {
 sub run {
     my ($self) = @_;
 
+    test_ayp_url;
     my $test_data = get_test_suite_data();
+    my @needles = qw(bios-boot nonexisting-package reboot-after-installation linuxrc-install-fail scc-invalid-url warning-pop-up autoyast-boot package-notification nvidia-validation-failed import-untrusted-gpg-key);
 
-    my @needles = qw(bios-boot nonexisting-package reboot-after-installation linuxrc-install-fail scc-invalid-url warning-pop-up autoyast-boot package-notification nvidia-validation-failed);
     my $expected_licenses = get_var('AUTOYAST_LICENSE');
     my @expected_warnings;
     if (defined $test_data->{expected_warnings}) {
         @expected_warnings = @{$test_data->{expected_warnings}};
         push(@needles, @expected_warnings);
     }
+    my @processed_warnings;
     if (get_var('EXTRABOOTPARAMS') =~ m/startshell=1/) {
         push @needles, 'linuxrc-start-shell-after-installation';
     }
@@ -145,11 +136,9 @@ sub run {
     # Do not try to fail early in case of autoyast_error_dialog scenario
     # where we test that certain error are properly handled
     push @needles, 'autoyast-error' unless get_var('AUTOYAST_EXPECT_ERRORS');
-    # bios-boot needle does not match if worker stalls during boot - poo#28648
-    push @needles, 'linux-login-casp' if is_caasp;
     # Autoyast reboot automatically without confirmation, usually assert 'bios-boot' that is not existing on zVM
     # So push a needle to check upcoming reboot on zVM that is a way to indicate the stage done
-    push @needles, 'autoyast-stage1-reboot-upcoming' if check_var('ARCH', 's390x') || is_pvm;
+    push @needles, 'autoyast-stage1-reboot-upcoming' if check_var('ARCH', 's390x') || (is_pvm && !is_upgrade);
     # Similar situation over IPMI backend, we can check against PXE menu
     push @needles, qw(prague-pxe-menu qa-net-selection) if check_var('BACKEND', 'ipmi');
     # Import untrusted certification for SMT
@@ -159,7 +148,8 @@ sub run {
     # resolve conflicts and this is a workaround during the update
     push(@needles, 'manual-intervention') if get_var("BREAK_DEPS", '1');
     # match openSUSE Welcome dialog on matching distros
-    push(@needles, 'opensuse-welcome') if opensuse_welcome_applicable;
+    push(@needles, 'opensuse-welcome')        if opensuse_welcome_applicable;
+    push(@needles, 'salt-formula-motd-setup') if get_var("SALT_FORMULAS_PATH");
     # If it's beta, we may match license screen before pop-up shows, so check for pop-up first
     if (get_var('BETA')) {
         push(@needles, 'inst-betawarning');
@@ -168,8 +158,14 @@ sub run {
         push(@needles, 'autoyast-license');
     }
 
+    # repo key expired bsc#1179654
+    record_soft_failure 'bsc#1179654' if is_sle('=15');
+    push @needles, 'expired-gpg-key' if is_sle('=15');
+
     # Push needle 'inst-bootmenu' to ensure boot from hard disk on aarch64
     push(@needles, 'inst-bootmenu') if (check_var('ARCH', 'aarch64') && get_var('UPGRADE'));
+    # If we have an encrypted root or boot volume, we reboot to a grub password prompt.
+    push(@needles, 'encrypted-disk-password-prompt') if get_var("ENCRYPT_ACTIVATE_EXISTING");
     # Kill ssh proactively before reboot to avoid half-open issue on zVM, do not need this on zKVM
     prepare_system_shutdown if check_var('BACKEND', 's390x');
     my $postpartscript = 0;
@@ -184,15 +180,20 @@ sub run {
     until (match_has_tag('reboot-after-installation')
           || match_has_tag('bios-boot')
           || match_has_tag('autoyast-stage1-reboot-upcoming')
-          || match_has_tag('linux-login-casp')
           || match_has_tag('inst-bootmenu')
-          || match_has_tag('lang_and_keyboard'))
+          || match_has_tag('lang_and_keyboard')
+          || match_has_tag('encrypted-disk-password-prompt'))
     {
         #Verify timeout and continue if there was a match
         next unless verify_timeout_and_check_screen(($timer += $check_time), \@needles);
         if (match_has_tag('autoyast-boot')) {
             send_key 'ret';    # press enter if grub timeout is disabled, like we have in reinstall scenarios
             last;              # if see grub, we get to the second stage, as it appears after bios-boot which we may miss
+        }
+        elsif (match_has_tag('import-untrusted-gpg-key')) {
+            handle_untrusted_gpg_key;
+            @needles = grep { $_ ne 'import-untrusted-gpg-key' } @needles;
+            next;
         }
         elsif (match_has_tag('prague-pxe-menu') || match_has_tag('qa-net-selection')) {
             @needles       = grep { $_ ne 'prague-pxe-menu' and $_ ne 'qa-net-selection' } @needles;
@@ -207,16 +208,19 @@ sub run {
             $num_errors++;
         }
         elsif (match_has_tag('warning-pop-up')) {
-            # Softfail only on sle, as timeout is there on CaaSP
+            # in order to avoid to match several times the same already processed warning
+            next if scalar grep { match_has_tag($_) } @processed_warnings;
+
+            # Softfail only on sle
             if (is_sle && check_screen('warning-partition-reduced', 0)) {
                 # See poo#19978, no timeout on partition warning, hence need to click OK button to soft-fail
                 record_info('bsc#1045470',
                     "There is no timeout on sle for reduced partition screen by default.\n"
-                      . "But there is timeout on CaaSP and if explicitly defined in profile. See bsc#1045470 for details.");
+                      . "See bsc#1045470 for details.");
                 send_key_until_needlematch 'create-partition-plans-finished', $cmd{ok};
                 next;
             }
-            @expected_warnings = grep { !match_has_tag($_) } @expected_warnings;
+            @processed_warnings = grep { match_has_tag($_) } @expected_warnings;
             # Process warnings
             handle_warnings;
         }
@@ -228,6 +232,14 @@ sub run {
             die "installation ends in linuxrc";
         }
         elsif (match_has_tag('autoyast-confirm')) {
+            if (get_var('ENCRYPT_ACTIVATE_EXISTING')) {
+                validate_encrypted_volume_activation({
+                        mapped_device => $test_data->{mapped_device},
+                        device_status => $test_data->{device_status}->{message},
+                        properties    => $test_data->{device_status}->{properties}
+                });
+            }
+
             # select network (second entry)
             send_key "ret";
 
@@ -267,6 +279,16 @@ sub run {
             wait_screen_change { send_key 'alt-u' };
             next;
         }
+        elsif (match_has_tag('salt-formula-motd-setup')) {
+            @needles = grep { $_ ne 'salt-formula-motd-setup' } @needles;
+            # used for salt-formulas
+            send_key 'alt-m';
+            type_string "$test_data->{motd_text}";
+            assert_screen 'salt-formulas-motd-changed';
+            send_key $cmd{next};
+            assert_screen 'salt-formulas-running-provisioner';
+            next;
+        }
         elsif (match_has_tag('autoyast-postpartscript')) {
             @needles        = grep { $_ ne 'autoyast-postpartscript' } @needles;
             $postpartscript = 1;
@@ -284,7 +306,11 @@ sub run {
             send_key 'alt-o';
         }
         elsif (match_has_tag('linuxrc-start-shell-after-installation')) {
-            type_string "exit\n";
+            @needles = grep { $_ ne 'linuxrc-start-shell-after-installation' } @needles;
+            enter_cmd "exit";
+        }
+        elsif (match_has_tag 'expired-gpg-key') {
+            send_key 'alt-y';
         }
     }
 
@@ -304,7 +330,7 @@ sub run {
 
     # Cannot verify second stage properly on s390x, so reconnect to already installed system
     if (check_var('ARCH', 's390x')) {
-        reconnect_mgmt_console(timeout => 500);
+        reconnect_mgmt_console(timeout => 500, grub_timeout => 180);
         return;
     }
     # For powerVM need to switch to mgmt console to handle the reboot properly
@@ -316,15 +342,13 @@ sub run {
     # If we didn't see pxe, the reboot is going now
     $self->wait_boot if check_var('BACKEND', 'ipmi') and not get_var('VIRT_AUTOTEST') and not $pxe_boot_done;
 
-    # CaaSP does not have second stage
-    return if is_caasp;
     # Second stage starts here
-    $maxtime = 1000;
+    $maxtime = 1000 * get_var('TIMEOUT_SCALE', 1);    # Max waiting time for stage 2
     $timer   = 0;
     $stage   = 'stage2';
 
     check_screen \@needles, $check_time;
-    @needles = qw(reboot-after-installation autoyast-postinstall-error autoyast-boot unreachable-repo warning-pop-up inst-bootmenu lang_and_keyboard);
+    @needles = qw(reboot-after-installation autoyast-postinstall-error autoyast-boot unreachable-repo warning-pop-up inst-bootmenu lang_and_keyboard encrypted-disk-password-prompt);
     # Do not try to fail early in case of autoyast_error_dialog scenario
     # where we test that certain error are properly handled
     push @needles, 'autoyast-error' unless get_var('AUTOYAST_EXPECT_ERRORS');
@@ -370,13 +394,19 @@ sub run {
         elsif (match_has_tag('opensuse-welcome')) {
             return;             # Popup itself is processed in opensuse_welcome module
         }
+        elsif (match_has_tag('encrypted-disk-password-prompt')) {
+            return;
+        }
     }
     # ssh console was activated at this point of time, so need to reset
     reset_consoles if is_pvm;
     my $expect_errors = get_var('AUTOYAST_EXPECT_ERRORS') // 0;
     die 'exceeded expected autoyast errors' if $num_errors != $expect_errors;
-    die "Test Fail! Expected warnings did not appear during the installation.
-    Expected: @expected_warnings" if scalar @expected_warnings > 0;
+    if (scalar @expected_warnings != scalar @processed_warnings) {
+        die "Test Fail! Expected warnings did not appear during the installation." .
+          "Expected: @expected_warnings Processed: @processed_warnings";
+    }
+
 }
 
 sub test_flags {
@@ -387,6 +417,7 @@ sub post_fail_hook {
     my ($self) = shift;
     $self->SUPER::post_fail_hook;
     $self->upload_autoyast_profile;
+    $self->upload_autoyast_schema;
 }
 
 1;

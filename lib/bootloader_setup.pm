@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright © 2016-2019 SUSE LLC
+# Copyright © 2016-2020 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -18,13 +18,15 @@ use Mojo::Util 'trim';
 use Time::HiRes 'sleep';
 use testapi;
 use utils;
-use version_utils qw(is_caasp is_jeos is_leap is_sle is_tumbleweed);
+use version_utils qw(is_microos is_jeos is_leap is_sle is_tumbleweed);
 use mm_network;
+use Utils::Backends 'is_pvm';
 
 use backend::svirt qw(SERIAL_TERMINAL_DEFAULT_DEVICE SERIAL_TERMINAL_DEFAULT_PORT SERIAL_CONSOLE_DEFAULT_DEVICE SERIAL_CONSOLE_DEFAULT_PORT);
 
 our @EXPORT = qw(
   add_custom_grub_entries
+  autoyast_boot_params
   boot_grub_item
   stop_grub_timeout
   boot_local_disk
@@ -63,6 +65,9 @@ our @EXPORT = qw(
   grub_mkconfig
   remove_grub_cmdline_settings
   replace_grub_cmdline_settings
+  mimic_user_to_import
+  tianocore_disable_secureboot
+  prepare_disks
 );
 
 our $zkvm_img_path = "/var/lib/libvirt/images";
@@ -260,7 +265,9 @@ sub boot_into_snapshot {
     send_key_until_needlematch('boot-menu-snapshot', 'down', 10, 5);
     send_key 'ret';
     # assert needle to avoid send down key early in grub_test_snapshot.
-    assert_screen 'snap-default' if get_var('OFW');
+    if (get_var('OFW') || is_pvm || check_var('SLE_PRODUCT', 'hpc')) {
+        send_key_until_needlematch('snap-default', 'down', 60, 5);
+    }
     # in upgrade/migration scenario, we want to boot from snapshot 1 before migration.
     if ((get_var('UPGRADE') && !get_var('ONLINE_MIGRATION', 0)) || get_var('ZDUP')) {
         send_key_until_needlematch('snap-before-update', 'down', 40, 5);
@@ -309,7 +316,7 @@ sub select_bootmenu_option {
 }
 
 sub get_extra_boot_params {
-    my @params = split ' ', get_var('EXTRABOOTPARAMS', '');
+    my @params = split ' ', trim(get_var('EXTRABOOTPARAMS', ''));
     return @params;
 }
 
@@ -334,7 +341,7 @@ sub uefi_bootmenu_params {
       :         send_key 'e';
     # Kiwi in TW uses grub2-mkconfig instead of the custom kiwi config
     # Locate gfxpayload parameter and update it
-    if (is_jeos && (is_tumbleweed || is_sle('>=15-sp2') || is_leap('>=15.2'))) {
+    if (is_jeos && (is_tumbleweed || is_sle('>=15-sp1') || is_leap('>=15.1'))) {
         for (1 .. 3) { send_key "down"; }
         send_key "end";
         # delete "keep" word
@@ -347,6 +354,10 @@ sub uefi_bootmenu_params {
         for (1 .. 10) { send_key "down"; }
     }
     else {
+        if (is_microos && get_var('BOOT_HDD_IMAGE')) {
+            # skip healthchecker lines
+            for (1 .. 5) { send_key "down"; }
+        }
         for (1 .. 2) { send_key "down"; }
         send_key "end";
         # delete "keep" word
@@ -362,6 +373,9 @@ sub uefi_bootmenu_params {
         }
         sleep 5;
         for (1 .. 4) { send_key "down"; }
+        if (is_microos && get_var('BOOT_HDD_IMAGE')) {
+            for (1 .. 7) { send_key "down"; }
+        }
     }
 
     send_key "end";
@@ -381,7 +395,7 @@ sub uefi_bootmenu_params {
     }
 
     # changed the line before typing video params
-    wait_screen_change(sub { type_string " \\\n"; }, 3);
+    wait_screen_change(sub { enter_cmd " \\"; }, 3);
     save_screenshot;
 }
 
@@ -428,11 +442,11 @@ sub bootmenu_default_params {
         push @params, "Y2DEBUG=1";
     }
     else {
-        # On JeOS and CaaSP we don't have YaST installer.
-        push @params, "Y2DEBUG=1" unless is_jeos || is_caasp;
+        # On JeOS and MicroOS we don't have YaST installer.
+        push @params, "Y2DEBUG=1" unless is_jeos || is_microos;
 
         # gfxpayload variable replaced vga option in grub2
-        if (!is_jeos && !is_caasp && (check_var('ARCH', 'i586') || check_var('ARCH', 'x86_64'))) {
+        if (!is_jeos && !is_microos && (check_var('ARCH', 'i586') || check_var('ARCH', 'x86_64'))) {
             push @params, "vga=791";
             my $video = 'video=1024x768';
             $video .= '-16' if check_var('QEMUVGA', 'cirrus');
@@ -442,7 +456,7 @@ sub bootmenu_default_params {
     }
 
     if (!get_var("NICEVIDEO")) {
-        if (is_caasp) {
+        if (is_microos) {
             push @params, get_bootmenu_console_params $args{baud_rate};
         }
         elsif (!is_jeos) {
@@ -463,9 +477,9 @@ sub bootmenu_default_params {
     # we have to use something else.
     if (check_var('VIRSH_VMM_FAMILY', 'hyperv')) {
         push @params, get_hyperv_fb_video_resolution;
-        push @params, 'namescheme=by-label' unless is_jeos or is_caasp;
+        push @params, 'namescheme=by-label' unless is_jeos or is_microos;
     }
-    type_string_very_slow(" @params ");
+    type_boot_parameters(" @params ");
     return @params;
 }
 
@@ -491,7 +505,7 @@ sub bootmenu_network_source {
                 # Ignore certificate validation
                 push @params, 'ssl.certs=0' if (get_var('SKIP_CERT_VALIDATION'));
                 # As we use boot options, no extra action is required
-                type_string_very_slow(" @params ");
+                type_boot_parameters(" @params ");
                 return @params;
             }
 
@@ -502,14 +516,14 @@ sub bootmenu_network_source {
                 # Specifies the installation system to use, e.g. from where to load installer
                 my $arch = get_var('ARCH');
                 push @params, "instsys=disk:/boot/$arch/root";
-                type_string_very_slow(" @params ");
+                type_boot_parameters(" @params ");
                 return @params;
             }
 
             select_installation_source({m_protocol => $m_protocol, m_mirror => $m_mirror});
         }
     }
-    type_string_very_slow(" @params ");
+    type_boot_parameters(" @params ");
     return @params;
 }
 
@@ -522,7 +536,7 @@ sub bootmenu_remote_target {
         push @params, "nameserver=" . join(",", @$dns);
         push @params, ("$remote=1", "${remote}password=$password");
     }
-    type_string_very_slow(" @params ");
+    type_boot_parameters(" @params ");
     return @params;
 }
 
@@ -533,10 +547,10 @@ sub select_installation_source {
     my ($m_server, $m_share, $m_directory);
 
     # Parse SUSEMIRROR into variables
-    if ($m_mirror =~ m{^[a-z]+://([a-zA-Z0-9.-]*)(/.*)$}) {
-        ($m_server, $m_directory) = ($1, $2);
+    if ($m_mirror =~ m{^[a-z]+://(?<server>[a-zA-Z0-9.-]*)/(?<dir>.*)$}) {
+        ($m_server, $m_directory) = ($+{server}, $+{dir});
         if ($m_protocol eq "smb") {
-            ($m_share, $m_directory) = $m_directory =~ /\/(.+?)(\/.*)/;
+            ($m_share, $m_directory) = split(/\//, $m_directory, 2);
         }
     }
 
@@ -551,7 +565,7 @@ sub select_installation_source {
     if ($m_protocol eq "http") {
         for (1 .. 2) {
             # just type enough backspaces
-            for (1 .. 32) { send_key "backspace" }
+            for (1 .. 34) { send_key "backspace" }
             send_key "tab";
         }
     }
@@ -559,7 +573,7 @@ sub select_installation_source {
     # Type variables into fields
     type_string_slow "$m_server\t";
     type_string_slow "$m_share\t" if $m_protocol eq "smb";
-    type_string_slow "$m_directory\n";
+    enter_cmd_slow "$m_directory";
     save_screenshot;
 
     # HTTP-proxy
@@ -570,7 +584,7 @@ sub select_installation_source {
             send_key "down";
         }
         send_key "ret";
-        type_string_slow "$proxyhost\t$proxyport\n";
+        enter_cmd_slow "$proxyhost\t$proxyport";
         assert_screen "inst-proxy_is_setup";
 
         # add boot parameters
@@ -602,16 +616,16 @@ sub select_bootmenu_more {
         # newer versions of qemu on arch automatically add 'console=ttyS0' so
         # we would end up nowhere. Setting console parameter explicitly
         # See https://bugzilla.suse.com/show_bug.cgi?id=1032335 for details
-        push @params, 'console=tty1' if get_var('MACHINE') =~ /aarch64/;
+        push @params, 'console=tty1' if get_var('MACHINE') =~ /aarch64|aarch32/;
         # Hyper-V defaults to 1280x1024, we need to fix it here
         push @params, get_hyperv_fb_video_resolution if check_var('VIRSH_VMM_FAMILY', 'hyperv');
-        type_string_very_slow(" @params ");
+        type_boot_parameters(" @params ");
         save_screenshot;
         send_key 'f10';
     }
     else {
         push @params, get_hyperv_fb_video_resolution if check_var('VIRSH_VMM_FAMILY', 'hyperv');
-        type_string_very_slow(" @params ");
+        type_boot_parameters(" @params ");
         save_screenshot;
         send_key 'ret';
     }
@@ -630,12 +644,20 @@ sub autoyast_boot_params {
         $autoyast_args .= "$proto://10.0.2.1/";
         $autoyast_args .= 'data/' if $ay_var !~ /^aytests\//;
         $autoyast_args .= $ay_var;
+    } elsif ($ay_var =~ /^ASSET_\d+$/) {
+        # In case profile is uploaded as an ASSET we need just filename
+        $ay_var = basename(get_required_var($ay_var));
+        $autoyast_args .= autoinst_url("/assets/other/$ay_var");
     } elsif ($ay_var !~ /^slp$|:\/\//) {
-        $autoyast_args .= data_url($ay_var);    # Getting profile from the worker as openQA asset
+        # Getting profile from the worker as openQA asset
+        $autoyast_args .= data_url($ay_var);
     } else {
-        $autoyast_args .= $ay_var;              # Getting profile by direct url or slp
+        # Getting profile by direct url or slp
+        $autoyast_args .= $ay_var;
     }
     push @params, split ' ', $autoyast_args;
+    $autoyast_args =~ /autoyast=(?<url>\S+)/;
+    set_var('AUTOYAST', $+{url});
     return @params;
 }
 
@@ -700,6 +722,11 @@ sub specific_bootmenu_params {
             if ($dud =~ /^(http|https|ftp):\/\//) {
                 push @params, "dud=$dud";
             }
+            elsif ($dud =~ /^ASSET_\d+$/) {
+                # In case dud is uploaded as an ASSET we need just filename
+                $dud = basename(get_required_var($dud));
+                push @params, 'dud=' . autoinst_url("/assets/other/$dud");
+            }
             else {
                 push @params, 'dud=' . data_url($dud);
             }
@@ -724,7 +751,11 @@ sub specific_bootmenu_params {
         return " @params ";
     }
 
-    type_string_very_slow " @params " if @params;
+    # Enable kernel.softlockup_panic, unless explicitly disabled
+    # See bsc#1126782
+    push @params, 'kernel.softlockup_panic=1' unless get_var('SOFTLOCKUP_PANIC_DISABLED', 0);
+
+    type_boot_parameters(" @params ") if (@params);
     save_screenshot;
     return @params;
 }
@@ -859,6 +890,33 @@ sub tianocore_enter_menu {
     }
 }
 
+sub tianocore_disable_secureboot {
+    my $basetest = shift;
+
+    assert_screen 'grub2';
+    send_key 'c';
+    sleep 2;
+    enter_cmd "exit";
+    assert_screen 'tianocore-mainmenu';
+    # Select 'Boot manager' entry
+    send_key_until_needlematch('tianocore-devicemanager', 'down', 5, 5);
+    send_key 'ret';
+    send_key_until_needlematch('tianocore-devicemanager-sb-conf', 'down', 5, 5);
+    send_key 'ret';
+    send_key_until_needlematch('tianocore-devicemanager-sb-conf-attempt-sb', 'down', 5, 5);
+    send_key 'spc';
+    assert_screen 'tianocore-devicemanager-sb-conf-changed';
+    send_key 'ret';
+    assert_screen 'tianocore-devicemanager-sb-conf-attempt-sb';
+    send_key 'f10';
+    assert_screen 'tianocore-bootmanager-save-changes';
+    send_key 'Y';
+    send_key_until_needlematch 'tianocore-devicemanager',  'esc';
+    send_key_until_needlematch 'tianocore-mainmenu-reset', 'down';
+    send_key 'ret';
+    $basetest->wait_grub;
+}
+
 sub tianocore_select_bootloader {
     tianocore_enter_menu;
     send_key_until_needlematch('tianocore-bootmanager', 'down', 5, 5);
@@ -918,33 +976,31 @@ sub tianocore_http_boot {
 }
 
 sub zkvm_add_disk {
-    my ($svirt)  = @_;
-    my $dev_id   = 'a';
-    my $numdisks = get_var('NUMDISKS') || '1';
-
-    foreach my $n (1 .. $numdisks) {
-        if (my $hdd = get_var('HDD_' . $n)) {
-            my $basename = basename($hdd);
-            my $basedir  = svirt_host_basedir();
-            my $hdd_dir  = "$basedir/openqa/share/factory/hdd";
-            my $hdd_path = $svirt->get_cmd_output("find $hdd_dir -name $basename | head -n1 | tr -d '\n'");
-            die "Unable to find image $basename in $hdd_dir" unless $hdd_path;
-            diag("HDD path found: $hdd_path");
-            if (get_var('PATCHED_SYSTEM')) {
-                diag('in patched systems just load the patched image');
-                my $name        = $svirt->name;
-                my $patched_img = "$zkvm_img_path/${name}${dev_id}" . ".img";
-                $svirt->add_disk({file => $patched_img, dev_id => $dev_id});
-            }
-            else {
-                type_string("# copying image...\n");
-                $svirt->add_disk({file => $hdd_path, backingfile => 1, dev_id => $dev_id});    # Copy disk to local storage
-            }
-            $dev_id = chr((ord $dev_id) + 1);
+    my ($svirt) = @_;
+    if (my $hdd = get_var('HDD_1')) {
+        my $basename = basename($hdd);
+        my $basedir  = svirt_host_basedir();
+        my $hdd_dir  = "$basedir/openqa/share/factory/hdd";
+        my $hdd_path = $svirt->get_cmd_output("find $hdd_dir -name $basename | head -n1 | tr -d '\n'");
+        die "Unable to find image $basename in $hdd_dir" unless $hdd_path;
+        diag("HDD path found: $hdd_path");
+        if (get_var('PATCHED_SYSTEM')) {
+            diag('in patched systems just load the patched image');
+            my $name        = $svirt->name;
+            my $patched_img = "$zkvm_img_path/$name" . "a.img";
+            $svirt->add_disk({file => $patched_img, dev_id => 'a'});
         }
         else {
-            # Add new disks according to NUMDISKS
-            my $size_i = get_var('HDDSIZEGB') || '4';
+            enter_cmd("# copying image...");
+            $svirt->add_disk({file => $hdd_path, backingfile => 1, dev_id => 'a'});    # Copy disk to local storage
+        }
+    }
+    else {
+        # Add new disks according to NUMDISKS
+        my $size_i   = get_var('HDDSIZEGB') || '4';
+        my $numdisks = get_var('NUMDISKS')  || '1';
+        my $dev_id   = 'a';
+        foreach my $n (1 .. $numdisks) {
             $svirt->add_disk({size => $size_i . "G", create => 1, dev_id => $dev_id});
             # apply next letter as dev_id
             $dev_id = chr((ord $dev_id) + 1);
@@ -1192,7 +1248,7 @@ Returns the array of the boot parameters.
 =cut
 
 sub parse_bootparams_in_serial {
-    my $parsed_string = wait_serial(qr/command line:.*/msi);
+    my $parsed_string = wait_serial(qr/command line:.*\[/msi);
     $parsed_string =~ m/.*command line:(?<boot>.*)/i;
     return split ' ', $+{boot};
 }
@@ -1214,7 +1270,7 @@ sub compare_bootparams {
     if (scalar @difference > 0) {
         record_info("params mismatch", "Actual bootloader params do not correspond to the expected ones. Mismatched params: @difference", result => 'fail');
     } else {
-        record_info("params ok", "Bootloader parameters are typed correctly.\nVerified parameters: @{$expected_boot_params}");
+        record_info("params ok", "Bootloader parameters are typed correctly.\nVerified parameters:\n" . join("\n", @{$expected_boot_params}));
     }
 }
 
@@ -1238,6 +1294,76 @@ sub create_encrypted_part {
     assert_script_run "parted -s /dev/$disk mkpart 1 512 100%";
     # encrypt created partition
     assert_script_run "echo nots3cr3t | cryptsetup $luks_type luksFormat -q --force-password /dev/${disk}1";
+}
+
+=head2 mimic_user_to_import
+
+    mimic_user_to_import(disk => $disk, passwd => $passwd, shadow => $shadow);
+
+Creates /etc/passwd and /etc/shadow files to simluate existing users on the
+encrypted partition disk. Is expected to be used together with create_encrypted_part
+Can be used to test user import functionality not to chain jobs.
+Method accepts C<disk> to define the device to work with, C<passwd> and C<shadow>
+store content of the /etc/passwd and /etc/shadow files accordingly.
+
+=cut
+sub mimic_user_to_import {
+    my (%args) = @_;
+    my $disk   = $args{disk};
+    my $passwd = $args{passwd};
+    my $shadow = $args{shadow};
+    my $mapper = "/dev/mapper/crypt";
+    my $mount  = "/mnt/crypt";
+    # open LUKS partition
+    assert_script_run "echo nots3cr3t | cryptsetup luksOpen -q /dev/${disk}1 crypt";
+    # format it and create passwd and shadow files
+    assert_script_run "mkfs.ext4 $mapper";
+    assert_script_run "mkdir $mount";
+    assert_script_run "mount $mapper $mount";
+    assert_script_run "mkdir $mount/etc";
+    # write content to the files
+    assert_script_run "echo '$passwd' > $mount/etc/passwd";
+    assert_script_run "echo '$shadow' > $mount/etc/shadow";
+    # unmount and close LUKS partition
+    assert_script_run "umount $mount";
+    assert_script_run "cryptsetup luksClose $mapper";
+}
+
+sub type_boot_parameters {
+    my (@params) = @_;
+    type_string(" @params ", max_interval => check_var('TYPE_BOOT_PARAMS_FAST', 1) ? undef : utils::VERY_SLOW_TYPING_SPEED);
+}
+
+=head2 prepare_disks
+
+    prepare_disks
+
+Wipe existing disks and create encrypted partitions if needed for the test.
+Is handy for the bare metal setups and LPARs where we can have traces of
+previous installation.
+
+=cut
+sub prepare_disks {
+    # Delete partition table before starting installation
+    select_console('install-shell');
+
+    my $disks = script_output('lsblk -n -l -o NAME -d -e 7,11');
+    for my $d (split('\n', $disks)) {
+        script_run "wipefs -af /dev/$d";
+        script_run "sync";
+        if (get_var('ENCRYPT_ACTIVATE_EXISTING') || get_var('ENCRYPT_CANCEL_EXISTING')) {
+            create_encrypted_part(disk => $d);
+            if (get_var('ETC_PASSWD') && get_var('ETC_SHADOW')) {
+                mimic_user_to_import(disk => $d,
+                    passwd => get_var('ETC_PASSWD'),
+                    shadow => get_var('ETC_SHADOW'));
+            }
+        } else {
+            script_run "parted /dev/$d mklabel gpt";
+            script_run "sync";
+        }
+    }
+    script_run "lsblk";
 }
 
 1;

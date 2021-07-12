@@ -1131,10 +1131,12 @@ DefaultPolicy default
     <install_recommended config:type="boolean">true</install_recommended>
     <instsource/>
     <packages config:type="list">
+      <package>binutils</package>
       <package>snapper</package>
       <package>sles-release</package>
       <package>qa_test_ltp</package>
       <package>qa-release</package>
+      <package>iputils</package>
       <package>openssh</package>
       <package>numactl</package>
       <package>kexec-tools</package>
@@ -1146,6 +1148,7 @@ DefaultPolicy default
       <package>e2fsprogs</package>
       <package>btrfsprogs</package>
       <package>SuSEfirewall2</package>
+      <package>qemu-guest-agent</package>
     </packages>
     <patterns config:type="list">
       <pattern>32bit</pattern>

@@ -8,6 +8,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: tracker
 # Summary: Tracker: tracker info for file
 # - Launch a xterm
 # - Run "tracker info newpl.pl" or "tracker-info newpl.pl" if older than
@@ -22,7 +23,7 @@ use strict;
 use warnings;
 use testapi;
 use utils;
-use version_utils 'is_sle';
+use version_utils qw(is_sle is_leap);
 
 sub run {
     x11_start_program('xterm');
@@ -30,7 +31,8 @@ sub run {
         script_run "tracker-info newpl.pl";
     }
     else {
-        script_run "tracker info newpl.pl";
+        my $trackercmd = (is_sle('<16') or is_leap('<16.0')) ? 'tracker' : 'tracker3';
+        script_run "$trackercmd info newpl.pl";
     }
     assert_screen 'tracker-info-newpl';
     send_key "alt-f4";

@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright (C) 2019 SUSE LLC
+# Copyright (C) 2019-2020 SUSE LLC
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -25,10 +25,12 @@ use base "virt_feature_test_base";
 use virt_utils;
 use set_config_as_glue;
 use virt_autotest::virtual_network_utils;
+use virt_autotest::utils;
 use strict;
 use warnings;
 use testapi;
 use utils;
+use version_utils 'is_sle';
 
 sub run_test {
     my ($self) = @_;
@@ -40,51 +42,50 @@ sub run_test {
     die "The default(NAT BASED NETWORK) virtual network does not exist" if (script_run('virsh net-list --all | grep default') != 0);
 
     #Create NAT BASED NETWORK
-    assert_script_run("virsh net-info default");
-    assert_script_run("virsh net-dumpxml default |tee libvirt_default.xml");
-    assert_script_run("virsh net-undefine default");
     assert_script_run("virsh net-create vnet_nated.xml");
     save_screenshot;
     upload_logs "vnet_nated.xml";
     assert_script_run("rm -rf vnet_nated.xml");
 
-    my $gi_vnet_nated;
-    foreach my $guest (keys %xen::guests) {
+    my ($mac, $model, $affecter, $exclusive);
+    my $gate = '192.168.128.1';
+    foreach my $guest (keys %virt_autotest::common::guests) {
         record_info "$guest", "NAT BASED NETWORK for $guest";
-        #figure out that used with virtio as the network device model during
-        #attach-interface via virsh worked for all sles guest
-        assert_script_run("virsh attach-interface $guest network vnet_nated --model virtio --live", 60);
-        #Get the Guest IP Address from NAT BASED NETWORK
-        if (get_var("XEN") || check_var("HOST_HYPERVISOR", "xen")) {
-            my $mac_nated = script_output("virsh domiflist $guest | grep vnet_nated | grep -oE \"[[:xdigit:]]{2}(:[[:xdigit:]]{2}){5}\"");
-            script_retry "ip neigh | grep $mac_nated | grep -oE \"([0-9]{1,3}[\.]){3}[0-9]{1,3}\"", delay => 60, retry => 6, timeout => 60;
-            $gi_vnet_nated = script_output("ip neigh | grep $mac_nated | grep -oE \"([0-9]{1,3}[\.]){3}[0-9]{1,3}\"");
+        ensure_online $guest, skip_network => 1;
+
+        if (is_sle('=11-sp4') && is_xen_host) {
+            $affecter  = "--persistent";
+            $exclusive = "bridge --live --persistent";
+        } else {
+            $affecter  = "";
+            $exclusive = "network --current";
         }
-        else {
-            script_retry "virsh net-dhcp-leases vnet_nated | grep -oE \"([0-9]{1,3}[\.]){3}[0-9]{1,3}\"", delay => 60, retry => 6, timeout => 60;
-            $gi_vnet_nated = script_output("virsh net-dhcp-leases vnet_nated | grep -oE \"([0-9]{1,3}[\.]){3}[0-9]{1,3}\"");
-        }
-        #Confirm NAT BASED NETWORK
-        assert_script_run("ssh root\@$gi_vnet_nated 'ping -c2 -W1 openqa.suse.de'", 60);
-        save_screenshot;
-        assert_script_run("virsh detach-interface $guest network --current");
+
+        $mac   = '00:16:3e:32:' . (int(rand(89)) + 10) . ':' . (int(rand(89)) + 10);
+        $model = (is_xen_host) ? 'netfront' : 'virtio';
+
+        #Check guest loaded kernel module before attach interface to guest system
+        check_guest_module("$guest", module => "acpiphp");
+        assert_script_run("virsh attach-interface $guest network vnet_nated --model $model --mac $mac --live $affecter", 60);
+
+        my $net = is_sle('=11-sp4') ? 'br123' : 'vnet_nated';
+        test_network_interface($guest, mac => $mac, gate => $gate, net => $net);
+
+        assert_script_run("virsh detach-interface $guest --mac $mac $exclusive");
     }
+
     #Destroy NAT BASED NETWORK
     assert_script_run("virsh net-destroy vnet_nated");
     save_screenshot;
-
-    #Restore default(NATed Network)
-    virt_autotest::virtual_network_utils::restore_libvirt_default();
 }
 
 sub post_fail_hook {
     my ($self) = @_;
 
-    #Upload debug log
-    virt_autotest::virtual_network_utils::upload_debug_log();
+    $self->SUPER::post_fail_hook;
 
     #Restart libvirtd service
-    virt_autotest::virtual_network_utils::restart_libvirtd();
+    virt_autotest::utils::restart_libvirtd();
 
     #Destroy created virtual networks
     virt_autotest::virtual_network_utils::destroy_vir_network();

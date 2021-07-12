@@ -1,4 +1,4 @@
-# Copyright (C) 2015-2016 SUSE LLC
+# Copyright (C) 2015-2020 SUSE LLC
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -13,6 +13,7 @@
 # You should have received a copy of the GNU General Public License along
 # with this program; if not, see <http://www.gnu.org/licenses/>.
 
+# Package: wicked systemd iproute2 hwinfo
 # Summary: wicked script for more logs if eth0 is not up
 # - Check wickedd status
 # - Send network interface list to serial output
@@ -29,7 +30,7 @@
 #   - Collect network card info
 #   - Compress everything and upload the logs
 #   - Save a screenshot
-# Maintainer: Oliver Kurz <okurz@suse.de>
+# Maintainer: QA SLE YaST team <qa-sle-yast@suse.de>
 
 use strict;
 use warnings;
@@ -38,40 +39,41 @@ use testapi;
 
 sub run {
     # https://en.opensuse.org/openSUSE:Bugreport_wicked
-    type_string "systemctl status wickedd.service\n";
-    type_string "echo `wicked show all |cut -d ' ' -f 1` END | tee /dev/$serialdev\n";
+    enter_cmd "systemctl status wickedd.service";
+    enter_cmd "echo `wicked show all |cut -d ' ' -f 1` END | tee /dev/$serialdev";
     my $iflist = wait_serial("END", 10);
-    $iflist =~ s/\bEND\b//g;
-    $iflist =~ s/\blo\b//g;
-    $iflist =~ s/^\s*//g;
-    $iflist =~ s/\s*$//g;
+    # For poo#70453, to filter network link from mixed info of the output of wicked cmd
+    # we need substr output string from serial. Ex: 'lo0 eth0 END' -> 'eth0'
+    ($iflist) =~ s/(.*lo\s)(.*)(\sEND.*)/$2/s;
+    $iflist   =~ s/^\s*//g;
+    $iflist   =~ s/\s*$//g;
 
     my $up = 1;
     for my $if (split(/\s+/, $iflist)) {
-        type_string "wicked show '$if' |head -n1|awk '{print\$2}'| tee /dev/$serialdev\n";
+        enter_cmd "wicked show '$if' |head -n1|awk '{print\$2}'| tee /dev/$serialdev";
         $up = 0 if !wait_serial("up", 10);
     }
     if (!$up) {
-        type_string "mkdir /tmp/wicked\n";
+        enter_cmd "mkdir /tmp/wicked";
         # enable debugging
-        type_string "perl -i -lpe 's{^(WICKED_DEBUG)=.*}{\$1=\"all\"};s{^(WICKED_LOG_LEVEL)=.*}{\$1=\"debug\"}' /etc/sysconfig/network/config\n";
-        type_string "egrep \"WICKED_DEBUG|WICKED_LOG_LEVEL\" /etc/sysconfig/network/config\n";
+        enter_cmd "perl -i -lpe 's{^(WICKED_DEBUG)=.*}{\$1=\"all\"};s{^(WICKED_LOG_LEVEL)=.*}{\$1=\"debug\"}' /etc/sysconfig/network/config";
+        enter_cmd "egrep \"WICKED_DEBUG|WICKED_LOG_LEVEL\" /etc/sysconfig/network/config";
         # restart the daemons
-        type_string "systemctl restart wickedd\n";
+        enter_cmd "systemctl restart wickedd";
         save_screenshot;
         # reapply the config
-        type_string "wicked --debug all ifup all\n";
+        enter_cmd "wicked --debug all ifup all";
         save_screenshot;
         # collect the configuration
-        type_string "wicked show-config > /tmp/wicked/config-dump.log\n";
+        enter_cmd "wicked show-config > /tmp/wicked/config-dump.log";
         # collect the status
-        type_string "wicked ifstatus --verbose all > /tmp/wicked/status.log\n";
-        type_string "journalctl -b -o short-precise > /tmp/wicked/wicked.log\n";
-        type_string "ip addr show > /tmp/wicked/ip_addr.log\n";
-        type_string "ip route show table all > /tmp/wicked/routes.log\n";
+        enter_cmd "wicked ifstatus --verbose all > /tmp/wicked/status.log";
+        enter_cmd "journalctl -b -o short-precise > /tmp/wicked/wicked.log";
+        enter_cmd "ip addr show > /tmp/wicked/ip_addr.log";
+        enter_cmd "ip route show table all > /tmp/wicked/routes.log";
         # collect network information
-        type_string "hwinfo --netcard > /tmp/wicked/hwinfo-netcard.log\n";
-        type_string "tar -czf /tmp/wicked_logs.tgz /etc/sysconfig/network /tmp/wicked\n";
+        enter_cmd "hwinfo --netcard > /tmp/wicked/hwinfo-netcard.log";
+        enter_cmd "tar -czf /tmp/wicked_logs.tgz /etc/sysconfig/network /tmp/wicked";
         upload_logs "/tmp/wicked_logs.tgz";
         save_screenshot;
     }

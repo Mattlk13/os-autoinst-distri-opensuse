@@ -35,11 +35,11 @@ sub reboot_wait {
 sub setup {
     my ($self) = @_;
 
-    my $tarball = get_var('MR_TEST_TARBALL', 'https://gitlab.suse.de/rbranco/mr_test/-/archive/master/mr_test-master.tar.gz');
+    my $tarball = get_var('MR_TEST_TARBALL', 'https://gitlab.suse.de/qa/mr_test/-/archive/master/mr_test-master.tar.gz');
 
     $self->select_serial_terminal;
     # Disable packagekit
-    pkcon_quit;
+    quit_packagekit;
     # saptune is not installed by default on SLES4SAP 12 on ppc64le and in textmode profile
     zypper_call "-n in saptune" if ((is_ppc64le() and is_sle('<15')) or check_var('DESKTOP', 'textmode'));
     # Install mr_test dependencies
@@ -50,11 +50,13 @@ sub setup {
     assert_script_run "echo 'export PATH=\$PATH:\$HOME' >> /root/.bashrc";
     # Remove any configuration set by sapconf
     assert_script_run "sed -i.bak '/^@/,\$d' /etc/security/limits.conf";
-    assert_script_run "mv /etc/systemd/logind.conf.d/sap.conf{,.bak}" unless check_var('DESKTOP', 'textmode');
+    script_run "mv /etc/systemd/logind.conf.d/sap.conf{,.bak}" unless check_var('DESKTOP', 'textmode');
     assert_script_run 'saptune daemon start';
     if (check_var('BACKEND', 'qemu')) {
         # Ignore disk_elevator on VM's
         assert_script_run "sed -ri '/:scripts\\/disk_elevator/s/^/#/' \$(fgrep -rl :scripts/disk_elevator Pattern/)";
+        # Skip nr_requests on VM's. Fix bsc#1177888
+        assert_script_run 'sed -i "/:scripts\/nr_requests/s/^/#/" Pattern/SLE15/testpattern_*';
     }
     $self->reboot_wait;
 }
@@ -83,14 +85,13 @@ sub test_bsc1152598 {
 
     assert_script_run "mr_test verify Pattern/${SLE}/testpattern_bsc1152598#1_1";
     assert_script_run 'echo -e "[version]\n# foobar-NOTE=foobar CATEGORY=foobar VERSION=0 DATE=foobar NAME=\" foobar \"\n[block]\nIO_SCHEDULER=none, foobar\n" > /etc/saptune/extra/scheduler-test.conf';
-    assert_script_run 'grep -q noop /sys/block/[sv]da/queue/scheduler 2>/dev/null && sed -i s/none/noop/ /etc/saptune/extra/scheduler-test.conf';
     assert_script_run "saptune note apply scheduler-test";
     assert_script_run "mr_test verify Pattern/${SLE}/testpattern_bsc1152598#1_2";
     assert_script_run "saptune revert all";
     assert_script_run "mr_test verify Pattern/${SLE}/testpattern_bsc1152598#1_1";
     assert_script_run 'echo -e "[version]\n# foobar-NOTE=foobar CATEGORY=foobar VERSION=0 DATE=foobar NAME=\" foobar \"\n[block]\nIO_SCHEDULER=foobar, none\n" > /etc/saptune/extra/scheduler-test.conf';
-    assert_script_run 'grep -q noop /sys/block/[sv]da/queue/scheduler 2>/dev/null && sed -i s/none/noop/ /etc/saptune/extra/scheduler-test.conf';
     assert_script_run 'saptune note apply scheduler-test';
+    assert_script_run "fgrep -q '[none]' /sys/block/sda/queue/scheduler";
     assert_script_run "mr_test verify Pattern/${SLE}/testpattern_bsc1152598#1_2";
     assert_script_run "saptune revert all";
 }
@@ -260,32 +261,6 @@ sub test_rename {
     assert_script_run "mr_test verify ${dir}/testpattern_saptune-rename#4_1";
 }
 
-sub test_sapconf {
-    my ($self) = @_;
-
-    my $SLE = is_sle(">=15") ? "SLE15" : "SLE12";
-
-    # Scenario 1: sapconf is running and active with sap-netweaver profile.
-    # The test shall show, that a running tuned profile or sapconf is not compromised.
-    assert_script_run 'cp /etc/systemd/logind.conf.d/sap.conf{.bak,}';
-    systemctl "enable --now sapconf";
-    systemctl "disable tuned";
-    systemctl "start tuned";
-    if (is_sle('>=15')) {
-        assert_script_run "tuned-adm profile sapconf";
-    } else {
-        assert_script_run "sapconf netweaver";
-    }
-    $self->reboot;
-    assert_script_run "mr_test verify Pattern/$SLE/testpattern_Upd#2_2";
-
-    # Scenario 2: sapconf has been disabled (only the service), but the package is still there.
-    assert_script_run "cp /etc/security/limits.conf{.bak,}";
-    systemctl "disable --now sapconf";
-    $self->reboot;
-    assert_script_run "mr_test verify Pattern/$SLE/testpattern_Upd#3_2";
-}
-
 sub test_note {
     my ($self, $note) = @_;
 
@@ -314,10 +289,10 @@ sub test_override {
     my @overrides = ($note =~ m/^(1557506|1771258)$/) ? ("${note}-1", "${note}-2") : (${note});
 
     if ($note eq "1680803") {
-        # Ignore the tests for the scheduler if we can't set "noop" on /dev/sr0
+        # Ignore the tests for the scheduler if we can't set "none" on /dev/sr0
         assert_script_run(
             "if [ -f /sys/block/sr0/queue/scheduler ] ; then "
-              . "grep -q noop /sys/block/sr0/queue/scheduler || "
+              . "grep -q none /sys/block/sr0/queue/scheduler || "
               . "sed -i '/:scripts\\/nr_requests/s/^/#/' Pattern/$SLE/testpattern_note_${note}_a_override ; fi"
         );
     }
@@ -423,19 +398,19 @@ sub test_x86_64 {
     assert_script_run 'cpupower idle-set -E';
     $self->reboot_wait;
     assert_script_run "mr_test verify Pattern/$SLE/testpattern_Cust#Intel_1";
-    assert_script_run "saptune apply note $note";
+    assert_script_run "saptune note apply $note";
     assert_script_run "mr_test verify Pattern/$SLE/testpattern_Cust#Intel_2";
-    assert_script_run "saptune revert note $note";
+    assert_script_run "saptune note revert $note";
     assert_script_run "mr_test verify Pattern/$SLE/testpattern_Cust#Intel_1";
     assert_script_run "echo -e '[cpu]\\nenergy_perf_bias=powersave\\ngovernor=powersave\\nforce_latency=' > /etc/saptune/override/$note";
-    assert_script_run "saptune apply note $note";
+    assert_script_run "saptune note apply $note";
     assert_script_run "mr_test verify Pattern/$SLE/testpattern_Cust#Intel_3";
-    assert_script_run "saptune revert note $note";
+    assert_script_run "saptune note revert $note";
     assert_script_run "mr_test verify Pattern/$SLE/testpattern_Cust#Intel_1";
     assert_script_run "echo -e '[cpu]\\nenergy_perf_bias=\\ngovernor=\\nforce_latency=\\n' > /etc/saptune/override/$note";
-    assert_script_run "saptune apply note $note";
+    assert_script_run "saptune note apply $note";
     assert_script_run "mr_test verify Pattern/$SLE/testpattern_Cust#Intel_4";
-    assert_script_run "saptune revert note $note";
+    assert_script_run "saptune note revert $note";
     assert_script_run "mr_test verify Pattern/$SLE/testpattern_Cust#Intel_1";
 }
 
@@ -445,9 +420,7 @@ sub run {
     $self->setup;
 
     my $test = quotemeta(get_required_var("MR_TEST"));
-    if ($test eq "sapconf") {
-        $self->test_sapconf;
-    } elsif ($test eq "solutions") {
+    if ($test eq "solutions") {
         $self->test_solutions;
     } elsif ($test eq "notes") {
         $self->test_notes;
@@ -462,9 +435,9 @@ sub run {
         $self->test_note($test) if ($test ne "1805750");
         $self->test_override($test);
     } elsif ($test =~ m/^(x86_64|ppc64le)$/) {
-        $self->test_x86_64  if (check_var('BACKEND', 'ipmi'));
-        $self->test_ppc64le if is_ppc64le();
-        $self->test_bsc1152598;
+        $self->test_x86_64     if (check_var('BACKEND', 'ipmi'));
+        $self->test_ppc64le    if is_ppc64le();
+        $self->test_bsc1152598 if is_sle('>12-SP3');
     } elsif ($test eq "delete_rename") {
         $self->test_delete;
         $self->test_rename;

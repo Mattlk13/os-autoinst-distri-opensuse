@@ -9,6 +9,7 @@
 # without any warranty.
 
 
+# Package: yast2-network hostname iproute2
 # Summary: yast2 lan functionality test https://bugzilla.novell.com/show_bug.cgi?id=600576
 # - Install yast2-network
 # - Launch yast2 lan
@@ -65,6 +66,17 @@ sub run {
     }
 
     assert_screen 'test-yast2_lan-1';
+
+    # Do not set hostname via DHCP - poo#66775
+    # This is already the default on SLE, so change it for openSUSE only
+    if (is_opensuse) {
+        send_key "tab";
+        assert_screen 'yast2_lan-set-hostname-via-dhcp-selected';
+        send_key 'down';
+        send_key_until_needlematch("yast2_lan-set-hostname-via-dhcp-NO-selected", "up", 5);
+        send_key "ret";
+    }
+
     close_yast2_lan;
     wait_still_screen;
 
@@ -72,7 +84,7 @@ sub run {
     check_etc_hosts_update() if get_var('VALIDATE_ETC_HOSTS');
 
     $self->clear_and_verify_console;
-    assert_script_run "hostname|grep $hostname";
+    assert_script_run "hostnamectl --static |grep $hostname";
 
     clear_console;
     script_run('ip -o a s');

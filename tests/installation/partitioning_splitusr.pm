@@ -9,7 +9,7 @@
 # without any warranty.
 
 # Summary: Test custom partitioning selection: Split off '/usr' partition
-# Maintainer: Oliver Kurz <okurz@suse.de>
+# Maintainer: QA SLE YaST team <qa-sle-yast@suse.de>
 
 use base 'y2_installbase';
 use strict;
@@ -46,14 +46,14 @@ sub run {
     wait_screen_change { send_key $cmd{resize} };                          # Resize
     send_key 'alt-u';                                                      # Custom size
     send_key $cmd{size_hotkey} if is_storage_ng;
-    type_string '1.5G';
+    type_string '5G';
     send_key(is_storage_ng() ? $cmd{next} : 'ret');
     if (is_storage_ng) {
         # warning: / should be >= 10 GiB or disable snapshots
         assert_screen 'partition-splitusr-root-warning';
-        wait_screen_change { send_key 'alt-y' };                           # accept warning for small /
+        wait_screen_change { send_key 'alt-y' };              # accept warning for small /
         wait_screen_change { send_key 'alt-s' };
-        send_key_until_needlematch 'vda-selected', 'left';                 # Select vda again
+        send_key_until_needlematch 'vda-selected', 'left';    # Select vda again
     }
 
     # add /usr

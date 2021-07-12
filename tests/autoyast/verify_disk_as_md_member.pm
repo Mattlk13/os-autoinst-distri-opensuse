@@ -1,12 +1,13 @@
 # SUSE's openQA tests
 #
-# Copyright © 2019 SUSE LLC
+# Copyright © 2019-2021 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved. This file is offered as-is,
 # without any warranty.
 
+# Package: util-linux
 # Summary: Validate partitioning for autoyast installation when using disks as
 #          Multiple Device member. Uses two devices.
 #          The test verifies that the following configuration of the installed
@@ -14,7 +15,7 @@
 #             1. Number of partitions on MD RAID;
 #             2. RAID level;
 #             3. Mount points for MD partitions.
-# Maintainer: Oleksandr Orlov <oorlov@suse.de>
+# Maintainer: QE YaST <qa-sle-yast@suse.de>
 
 use strict;
 use warnings;

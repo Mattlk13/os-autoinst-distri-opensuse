@@ -20,18 +20,18 @@ use File::Basename;
 
 use constant SSH_TIMEOUT => 90;
 
-has instance_id => undef;                                                                             # unique CSP instance id
-has public_ip   => undef;                                                                             # public IP of instance
-has username    => undef;                                                                             # username for ssh connection
-has ssh_key     => undef;                                                                             # path to ssh-key for connection
-has image_id    => undef;                                                                             # image from where the VM is booted
+has instance_id => undef;               # unique CSP instance id
+has public_ip   => undef;               # public IP of instance
+has username    => undef;               # username for ssh connection
+has ssh_key     => undef;               # path to ssh-key for connection
+has image_id    => undef;               # image from where the VM is booted
 has type        => undef;
-has provider    => undef, weak => 1;                                                                  # back reference to the provider
+has provider    => undef, weak => 1;    # back reference to the provider
 has ssh_opts    => '-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o LogLevel=ERROR';
 
 =head2 run_ssh_command
 
-    run_ssh_command(cmd => 'command'[, timeout => 90][, ssh_opts =>'..'][, username => 'XXX'][, no_quote => 0]);
+    run_ssh_command(cmd => 'command'[, timeout => 90][, ssh_opts =>'..'][, username => 'XXX'][, no_quote => 0][, rc_only => 0]);
 
 Runs a command C<cmd> via ssh in the given VM. Retrieves the output.
 If the command retrieves not zero, a exception is thrown..
@@ -39,20 +39,24 @@ Timeout can be set by C<timeout> or 90 sec by default.
 C<<proceed_on_failure=>1>> allows to proceed with validation when C<cmd> is
 failing (return non-zero exit code)
 By default, the command is passed in single quotes to SSH.
-To avoid quoting us C<<no_quote=>1>>.
+To avoid quoting use C<<no_quote=>1>>.
 With C<<ssh_opts=>'...'>> you can overwrite all default ops which are in
 C<<$instance->ssh_opts>>.
 Use argument C<username> to specify a different username then
 C<<$instance->username()>>.
+Use argument C<rc_only> to only check for the return code of the command.
 =cut
 sub run_ssh_command {
-    my ($self, %args) = @_;
+    my $self = shift;
+    my %args = testapi::compat_args({cmd => undef}, ['cmd'], @_);
     die('Argument <cmd> missing') unless ($args{cmd});
     $args{ssh_opts} //= $self->ssh_opts() . " -i '" . $self->ssh_key . "'";
     $args{username} //= $self->username();
     $args{timeout}  //= SSH_TIMEOUT;
     $args{quiet}    //= 1;
     $args{no_quote} //= 0;
+    my $rc_only = $args{rc_only} // 0;
+    my $timeout = $args{timeout};
 
     my $cmd = $args{cmd};
     unless ($args{no_quote}) {
@@ -60,21 +64,62 @@ sub run_ssh_command {
         $cmd = "'$cmd'";
     }
 
-    my $ssh_cmd = sprintf('ssh %s "%s@%s" -- %s',
-        $args{ssh_opts}, $args{username}, $self->public_ip, $cmd);
+    my $ssh_cmd = sprintf('ssh %s "%s@%s" -- %s', $args{ssh_opts}, $args{username}, $self->public_ip, $cmd);
+    $ssh_cmd = "timeout $timeout $ssh_cmd" if ($timeout > 0);
     record_info('SSH CMD', $ssh_cmd);
 
     delete($args{cmd});
     delete($args{no_quote});
     delete($args{ssh_opts});
     delete($args{username});
+    delete($args{rc_only});
     if ($args{timeout} == 0) {
         # Run the command and don't wait for it - no output nor returncode here
         script_run($ssh_cmd, %args);
+    } elsif ($rc_only) {
+        # Increase the hard timeout for script_run, otherwise our 'timeout $args{timeout} ...' has no effect
+        $args{timeout} += 2;
+        # Pipe both the standard and error output serial for debug purposes
+        $ssh_cmd .= " >/dev/$serialdev 2>&1";
+        # Run the command and return only the returncode here
+        my $ret = script_run($ssh_cmd, %args, quiet => 0);
+        die("Timeout on $ssh_cmd") unless (defined($ret));
+        return $ret;
     } else {
         # Run the command, wait for it and return the output
         return script_output($ssh_cmd, %args);
     }
+}
+
+=head2 retry_ssh_command
+
+    ssh_script_retry(command[, retry => 3][, delay => 10][, timeout => 90][, ssh_opts =>'..'][, username => 'XXX'][, no_quote => 0]);
+
+Run a C<command> via ssh in the given PC instance until it succeeds or
+the given number of retries is exhausted and an exception is thrown.
+Timeout can be set by C<timeout> or 90 sec by default.
+By default, the command is passed in single quotes to SSH.
+To avoid quoting use C<<no_quote=>1>>.
+With C<<ssh_opts=>'...'>> you can overwrite all default ops which are in
+C<<$instance->ssh_opts>>.
+Use argument C<username> to specify a different username then
+C<<$instance->username()>>.
+=cut
+sub retry_ssh_command {
+    my $self = shift;
+    my %args = testapi::compat_args({cmd => undef}, ['cmd'], @_);
+    $args{rc_only} = 1;
+    $args{timeout} //= 90;    # Timeout before we cancel the command
+    my $tries = delete $args{retry} // 3;
+    my $delay = delete $args{delay} // 10;
+    my $cmd   = delete $args{cmd};
+
+    for (my $try = 0; $try < $tries; $try++) {
+        my $rc = $self->run_ssh_command(cmd => $cmd, %args);
+        return $rc if (defined $rc && $rc == 0);
+        sleep($delay);
+    }
+    die "Waiting for Godot: " . $cmd;
 }
 
 =head2 scp
@@ -152,25 +197,34 @@ sub wait_for_guestregister
     die('guestregister didn\'t end in expected timeout=' . $args{timeout});
 }
 
-=head2 check_ssh_port
+=head2 wait_for_ssh
 
-    check_ssh_port([timeout => 600] [, proceed_on_failure => 0])
+    wait_for_ssh([timeout => 600] [, proceed_on_failure => 0])
 
 Check if the SSH port of the instance is reachable and open.
 =cut
-sub check_ssh_port
+sub wait_for_ssh
 {
     my ($self, %args) = @_;
     $args{timeout}            //= 600;
     $args{proceed_on_failure} //= 0;
+    $args{username}           //= $self->username();
     my $start_time = time();
 
+    # Check port 22
     while ((my $duration = time() - $start_time) < $args{timeout}) {
-        return $duration if (script_run('nc -vz -w 1 ' . $self->{public_ip} . ' 22', quiet => 1) == 0);
+        last if (script_run('nc -vz -w 1 ' . $self->{public_ip} . ' 22', quiet => 1) == 0);
         sleep 1;
     }
+
+    # Check ssh command
+    while ((my $duration = time() - $start_time) < $args{timeout}) {
+        return $duration if ($self->run_ssh_command(cmd => 'sudo journalctl -b | grep -E "Reached target (Cloud-init|Default|Main User Target)"', proceed_on_failure => 1, quiet => 1, username => $args{username}) =~ m/Reached target.*/);
+        sleep 1;
+    }
+
     croak(sprintf("Unable to reach SSH port of instance %s with public IP:%s within %d seconds",
-            $self->{instance_id}, $self->{public_ip}, $self->{timeout}))
+            $self->{instance_id}, $self->{public_ip}, $args{timeout}))
       unless ($args{proceed_on_failure});
     return;
 }
@@ -186,7 +240,8 @@ reachable anymore. The second one is the estimated bootup time.
 sub softreboot
 {
     my ($self, %args) = @_;
-    $args{timeout} //= 600;
+    $args{timeout}  //= 600;
+    $args{username} //= $self->username();
 
     my $duration;
 
@@ -197,11 +252,11 @@ sub softreboot
 
     # wait till ssh disappear
     while (($duration = time() - $start_time) < $args{timeout}) {
-        last unless (defined($self->check_ssh_port(timeout => 1, proceed_on_failure => 1)));
+        last unless (defined($self->wait_for_ssh(timeout => 1, proceed_on_failure => 1, username => $args{username})));
     }
     my $shutdown_time = time() - $start_time;
     die("Waiting for system down failed!") unless ($shutdown_time < $args{timeout});
-    my $bootup_time = $self->check_ssh_port(timeout => $args{timeout} - $shutdown_time);
+    my $bootup_time = $self->wait_for_ssh(timeout => $args{timeout} - $shutdown_time, username => $args{username});
     return ($shutdown_time, $bootup_time);
 }
 
@@ -228,7 +283,19 @@ sub start
 {
     my ($self, %args) = @_;
     $self->provider->start_instance($self, @_);
-    return $self->check_ssh_port(timeout => $args{timeout});
+    return $self->wait_for_ssh(timeout => $args{timeout});
+}
+
+=head2 get_state
+
+    get_state();
+
+Get the status of the instance using the CSP api calls.
+=cut
+sub get_state
+{
+    my $self = shift;
+    return $self->provider->get_state_from_instance($self, @_);
 }
 
 1;

@@ -7,6 +7,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 #
+# Package: rstudio-server MozillaFirefox
 # Summary: Basic test of RStudio Server
 # Maintainer: Dan Čermák <dcermak@suse.com>
 
@@ -53,6 +54,10 @@ sub run() {
     rstudio_sin_x_plot(rstudio_mode => "server");
 
     rstudio_create_and_test_new_project(rstudio_mode => "server");
+
+    rstudio_run_profiler(rstudio_mode => "server");
+
+    rstudio_test_notebook(rstudio_mode => "server");
 
     # log out at last and close firefox
     assert_and_click("rstudio_server-sign-out");

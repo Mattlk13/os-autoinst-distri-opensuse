@@ -30,21 +30,24 @@ sub run {
     $self->prepare_user_and_group();
 
     # Install slurm
-    zypper_call("in slurm-munge slurm-slurmdbd");
+    zypper_call("in slurm slurm-munge slurm-slurmdbd");
     # install slurm-node if sle15, not available yet for sle12
     zypper_call('in slurm-node') if is_sle '15+';
 
+    my $mariadb_service = "mariadb";
+    $mariadb_service = "mysql" if is_sle('<12-sp4');
+
     zypper_call("in mariadb");
-    systemctl("start mariadb");
-    systemctl("is-active mariadb");
+    systemctl("start $mariadb_service");
+    systemctl("is-active $mariadb_service");
 
     # allow hostnames other than localhost
     my $config = << "EOF";
 sed -i "/^bind-address.*/c\\#bind-address" /etc/my.cnf
 EOF
     assert_script_run($_) foreach (split /\n/, $config);
-    systemctl("restart mariadb");
-    systemctl("is-active mariadb");
+    systemctl("restart $mariadb_service");
+    systemctl("is-active $mariadb_service");
     record_info("mariadb conf", script_output("cat /etc/my.cnf"));
 
     # handle db preparation
@@ -56,8 +59,8 @@ EOF
     assert_script_run("mysql -uroot -e \"GRANT ALL ON slurm_acct_db.* TO \'slurm\'@\'master-node00.openqa.test\';\"");
     assert_script_run("mysql -uroot -e \"FLUSH PRIVILEGES;\"");
 
-    systemctl("restart mariadb");
-    systemctl("is-active mariadb");
+    systemctl("restart $mariadb_service");
+    systemctl("is-active $mariadb_service");
 
     barrier_wait("SLURM_SETUP_DONE");
 
@@ -68,6 +71,9 @@ EOF
     record_info("slurmdbd conf", script_output("cat /etc/slurm/slurmdbd.conf"));
     $self->enable_and_start("slurmdbd");
     systemctl('is-active slurmdbd');
+    # wait for slurmdbd sockets to avoid 'Connection refused'
+    assert_script_run('until ss -apn|grep pid=$(pidof slurmdbd)|grep LIST; do echo "waiting for slurmdb daemon"; done');
+    assert_script_run('sacctmgr -i add cluster linux');
     barrier_wait('SLURM_SETUP_DBD');
     barrier_wait("SLURM_MASTER_SERVICE_ENABLED");
 
@@ -77,6 +83,11 @@ EOF
     systemctl('is-active slurmd');
 
     barrier_wait("SLURM_SLAVE_SERVICE_ENABLED");
+
+    # always upload logs from slurmdbd as those are crucial and there is no simple
+    # way to get those logs if slurctld fails
+    upload_logs('/var/log/slurmdbd.log');
+
     barrier_wait("SLURM_MASTER_RUN_TESTS");
 }
 

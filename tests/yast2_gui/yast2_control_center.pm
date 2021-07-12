@@ -1,18 +1,19 @@
 # SUSE's openQA tests
 #
 # Copyright © 2009-2013 Bernhard M. Wiedemann
-# Copyright © 2012-2017 SUSE LLC
+# Copyright © 2012-2021 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: yast2-control-center-qt yast2-kdump yast2-boot-server yast2-sound
 # Summary: YaST2 UI test yast2-control-center provides sanity checks for YaST modules
 #    Make sure those yast2 modules can opened properly. We can add more
 #    feature test against each module later, it is ensure it will not crashed
 #    while launching atm.
-# Maintainer: Zaoliang Luo <zluo@suse.de>
+# Maintainer: QE YaST <qa-sle-yast@suse.de>
 
 use base 'y2_module_guitest';
 use strict;
@@ -40,9 +41,6 @@ sub search {
         send_key 'backspace';
     }
     wait_screen_change { type_string $name; } if $name;
-    # After typing some icons get detected before it's filetered
-    # Adding extra sync point before trying to click
-    wait_still_screen 3;
 }
 
 sub start_addon_products {
@@ -321,16 +319,20 @@ sub start_fonts {
 }
 
 sub run {
-    my $self = shift;
     select_console 'x11';
     if (is_sle '15+') {
         # kdump is disabled by default in the installer, so ensure that it's installed
         ensure_installed 'yast2-kdump';
         # see bsc#1062331, sound is not added to the yast2 pattern
-        # also add missing yast2-ca-management and yast2-auth-server
-        ensure_installed 'yast2-boot-server yast2-sound yast2-ca-management yast2-auth-server';
+        ensure_installed 'yast2-boot-server yast2-sound';
     }
-    $self->launch_yast2_module_x11('', target_match => 'yast2-control-center-ui', match_timeout => 180);
+    elsif (is_tumbleweed) {
+        record_soft_failure('bsc#1182125', "yast2-online-update-frontend is not pre-installed on TW");
+        ensure_installed('yast2-online-update-frontend');
+        record_soft_failure('bsc#1182241', "yast2-vpn is not pre-installed on TW");
+        ensure_installed('yast2-vpn yast2-sudo yast2-tune yast2-kdump');
+    }
+    y2_module_guitest::launch_yast2_module_x11('', target_match => 'yast2-control-center-ui', match_timeout => 180);
 
     start_addon_products;
     start_media_check;

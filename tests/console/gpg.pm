@@ -1,12 +1,13 @@
 # SUSE's openQA tests
 #
-# Copyright © 2017-2019 SUSE LLC
+# Copyright © 2017-2020 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: gpg2 haveged
 # Summary: gpg key generation, passphrase test, encrypt file and support fips test
 # - Install haveged if necessary
 # - Generate gpg key pair using pre determined data (using gpg itself or openqa
@@ -18,7 +19,9 @@
 # - Sign test file
 # - Check test file signature
 # - Cleanup
+#
 # Maintainer: Petr Cervinka <pcervinka@suse.com>, Ben Chou <bchou@suse.com>
+# Tags: poo#65375
 
 use base "consoletest";
 use strict;
@@ -67,32 +70,32 @@ EOF
 
         script_run("gpg2 -vv --gen-key &> /dev/$serialdev", 0);
         assert_screen 'gpg-set-keytype';    # Your Selection?
-        type_string "1\n";
-        assert_screen 'gpg-set-keysize';    # What keysize do you want?
-        type_string "$key_size\n";
+        enter_cmd "1";
+        assert_screen 'gpg-set-keysize';       # What keysize do you want?
+        enter_cmd "$key_size";
         assert_screen 'gpg-set-expiration';    # Key is valid for? (0)
         send_key 'ret';
         assert_screen 'gpg-set-correct';       # Is this correct? (y/N)
-        type_string "y\n";
+        enter_cmd "y";
         assert_screen 'gpg-set-realname';      # Real name:
-        type_string "$username\n";
+        enter_cmd "$username";
         assert_screen 'gpg-set-email';         # Email address:
-        type_string "$email\n";
+        enter_cmd "$email";
         assert_screen 'gpg-set-comment';       # Comment:
         send_key 'ret';
         assert_screen 'gpg-set-okay';          # Change (N)ame, (C)omment, (E)mail or (O)kay/(Q)uit?
-        type_string "O\n";
+        enter_cmd "O";
     }
 
     assert_screen("gpg-passphrase-enter");
-    type_string "REALSECRETPHRASE\n";          # Input insecure passphrase
+    enter_cmd "REALSECRETPHRASE";              # Input insecure passphrase
     assert_screen("gpg-passphrase-insecure");
     send_key 'tab';
     send_key 'ret';
     assert_screen("gpg-passphrase-enter");
-    type_string "$passwd\n";
+    enter_cmd "$passwd";
     assert_screen("gpg-passphrase-reenter");
-    type_string "$passwd\n";
+    enter_cmd "$passwd";
 
     # According to FIPS PUB 186-4 Digital Signature Standard (DSS), only the
     # 2048 and 4096 key length should be supported. See bsc#1125740 comment#15
@@ -118,7 +121,7 @@ EOF
     assert_script_run("test -e $tfile_gpg");
     script_run("gpg2 -u $email -d $tfile_gpg &> /dev/$serialdev", 0);
     assert_screen("gpg-passphrase-unlock", 10);
-    type_string "$passwd\n";
+    enter_cmd "$passwd";
     wait_serial("foo test content", 90) || die "File decryption failed!";
 
     # Reload gpg-agent (if it is running) to disable the passphrase caching
@@ -127,7 +130,7 @@ EOF
     # Signing function
     script_run("gpg2 -u $email --clearsign $tfile &> /dev/$serialdev", 0);
     assert_screen("gpg-passphrase-unlock", 10);
-    type_string "$passwd\n";
+    enter_cmd "$passwd";
     assert_script_run("test -e $tfile_asc");
     assert_script_run("gpg2 -u $email --verify --verbose $tfile_asc");
 
@@ -154,6 +157,10 @@ sub run {
     foreach my $len ('1024', '2048', '3072', '4096') {
         gpg_test($len, $gpg_version);
     }
+}
+
+sub test_flags {
+    return {fatal => 0};
 }
 
 1;

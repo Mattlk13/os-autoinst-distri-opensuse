@@ -1106,6 +1106,8 @@ DefaultPolicy default
     <install_recommended config:type="boolean">true</install_recommended>
     <instsource/>
     <packages config:type="list">
+      <package>binutils</package>
+      <package>iputils</package>
       <package>sles-release</package>
       <package>openssh</package>
       <package>numactl</package>
@@ -1116,6 +1118,7 @@ DefaultPolicy default
       <package>e2fsprogs</package>
       <package>btrfsprogs</package>
       <package>SuSEfirewall2</package>
+      <package>qemu-guest-agent</package>
     </packages>
     <patterns config:type="list">
       <pattern>Minimal</pattern>

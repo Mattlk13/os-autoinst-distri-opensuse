@@ -7,8 +7,9 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: vncmanager xorg-x11
 # Summary: Configure remote administration with yast2 vnc
-# Maintainer: Joaquín Rivera <jeriveramoya@suse.com>
+# Maintainer: QA SLE YaST team <qa-sle-yast@suse.de>
 
 use strict;
 use warnings;
@@ -23,12 +24,12 @@ sub configure_remote_admin {
     my $module_name = y2_module_consoletest::yast2_console_exec(yast2_module => 'remote');
     # Remote Administration Settings
     assert_screen 'yast2_vnc_remote_administration';
-    return if check_var('ARCH', 's390x');
     send_key $remote_admin{allow_remote_admin_with_session};
     assert_screen 'yast2_vnc_allow_remote_admin_with_session';
     # Firewall Settings
-    assert_screen 'yast2_vnc_firewall_port_closed';
-    send_key $firewall_settings{open_port};
+    if (check_screen 'yast2_vnc_firewall_port_closed') {
+        send_key $firewall_settings{open_port};
+    }
     # Firewall Details
     assert_screen 'yast2_vnc_firewall_port_open';
     send_key $firewall_settings{details};
@@ -46,28 +47,19 @@ sub configure_remote_admin {
 
 sub check_service_listening {
     my $cmd_check_port = $is_older_product ? 'netstat' : 'ss -tln | grep -E LISTEN.*:5901';
-    if (script_run($cmd_check_port)) {
-        record_soft_failure 'boo#1088646 - service vncmanager is not started automatically';
-        systemctl('status vncmanager', expect_false => 1);
-        systemctl('restart vncmanager');
-        systemctl('status vncmanager');
-        assert_script_run $cmd_check_port;
-    }
+    script_retry("$cmd_check_port", retry => 5, delay => 1);
+    systemctl('status vncmanager');
 }
 
 sub test_setup {
     select_console 'root-console';
     assert_script_run("if ! systemctl -q is-active network; then systemctl -q start network; fi");
-    if (check_var('ARCH', 's390x') && !$is_older_product) {
-        add_suseconnect_product('sle-module-desktop-applications', undef, undef, undef, 180);
-    }
     zypper_call('in vncmanager xorg-x11' . ($is_older_product ? ' net-tools' : ''));
 }
 
 sub run {
     test_setup;
     configure_remote_admin;
-    return if check_var('ARCH', 's390x');    # exit here as port is already open for s390x
     check_service_listening;
 }
 

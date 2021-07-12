@@ -52,7 +52,7 @@ sub prepare_mail_server {
     $mail_server_name = get_var("MAIL_SERVER_NAME", "mail.openqa.suse");
 
     # Stop PackageKit
-    pkcon_quit;
+    quit_packagekit;
 
     # Configure network for mail server (multi-machine test)
     if (get_var('MAIL_SERVER')) {
@@ -76,7 +76,7 @@ sub prepare_mail_client {
     $mail_server_ip   = get_var("MAIL_SERVER_IP");
 
     # Stop PackageKit
-    pkcon_quit;
+    quit_packagekit;
 
     # Configure network for mail client (multi-machine test)
     if (get_var('MAIL_CLIENT')) {
@@ -112,7 +112,7 @@ sub mailx_setup {
     my $pass   = $args{pass} || "$password";
     my $host   = $args{host} || "localhost";
     my $port   = $args{port} || "25";
-    my $ssl    = $args{ssl} || "no";
+    my $ssl    = $args{ssl}  || "no";
     my $mailrc = "~/.mailrc";
 
     # Configure mailx via mailrc to avoid long command-line
@@ -130,7 +130,7 @@ sub mailx_send_mail {
     my %args    = @_;
     my $to      = $args{to};
     my $subject = $args{subject} || "Testing Mail";
-    my $opts    = $args{opts} || "";
+    my $opts    = $args{opts}    || "";
 
     assert_script_run "echo 'Mail body' | mailx -v -s '$subject' $opts $to";
 }

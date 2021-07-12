@@ -7,6 +7,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: samba yast2-samba-server yast2-auth-server
 # Summary: YaST2 Samba functionality
 # Maintainer: Zaoliang Luo <zluo@suse.de>
 
@@ -24,7 +25,7 @@ my %ldap_directives = (
     dir_instance        => 'openqatest',
     dir_suffix          => 'dc=ldaptest,dc=org',
     dn_container        => 'dc=ldaptest,dc=org',
-    dir_manager_dn      => 'cn=root',
+    dir_manager_dn      => 'cn=Directory Manager',
     dir_manager_passwd  => 'openqatest',
     ca_cert_pem         => '/root/samba_ca_cert.pem',
     srv_cert_key_pkcs12 => '/root/samba_server_cert.p12'
@@ -45,7 +46,7 @@ my %samba_directives = (
 
 sub smb_conf_checker {
     my $error = "";
-    # select global & add share sections
+    # Select global & add share sections
     my $select_script = get_test_data('console/yast2_samba_share_section_selection.sh');
 
     die 'Updated smb.conf section is missing' if script_run($select_script);
@@ -86,7 +87,7 @@ sub setup_yast2_ldap_server {
     wait_still_screen(2);
     foreach (sort keys %ldap_options_to_dirs) {
         wait_screen_change { send_key "alt-$_" };
-        type_string($ldap_directives{$ldap_options_to_dirs{$_}} . "\n");
+        enter_cmd($ldap_directives{$ldap_options_to_dirs{$_}} . "");
     }
     assert_screen 'yast2_samba-389ds-setup';
     send_key $cmd{ok};

@@ -1,12 +1,13 @@
 # SUSE's openQA tests
 #
-# Copyright © 2016-2017 SUSE LLC
+# Copyright © 2016-2021 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: openvswitch-switch iputils
 # Summary: Basic openvswitch test
 #
 #   This test does the following
@@ -26,7 +27,8 @@ use warnings;
 use utils;
 
 sub run {
-    select_console 'root-console';
+    my $self = shift;
+    $self->select_serial_terminal;
 
     zypper_call('in openvswitch-switch iputils', timeout => 300);
 
@@ -95,6 +97,13 @@ sub run {
     # Add the L2 rule again and check that traffic is back
     script_run "ovs-ofctl add-flow ovs-openqa-br0 priority=0,actions=normal";
     assert_script_run "ip netns exec ovs-openqa-ns0 ping -c 5 172.16.0.2", 30;
+
+    # teardown
+    assert_script_run "ip netns del ovs-openqa-ns1";
+    assert_script_run "ip netns del ovs-openqa-ns0";
+    assert_script_run "ovs-vsctl del-br ovs-openqa-br1";
+    assert_script_run "ovs-vsctl del-br ovs-openqa-br0";
+    systemctl 'stop openvswitch';
 }
 
 1;

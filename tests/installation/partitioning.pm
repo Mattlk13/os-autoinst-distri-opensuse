@@ -34,18 +34,6 @@ sub run {
         send_key 'alt-n';
     }
 
-    if (get_var("DUALBOOT")) {
-        if (is_sle('15+')) {
-            record_soft_failure('bsc#1089723 Make sure keep the existing windows partition');
-            assert_screen "delete-partition";
-            send_key "alt-g";
-            assert_and_click "resize-or-remove-ifneeded";
-            send_key "up";
-            assert_and_click "resize-ifneeded";
-            for (1 .. 3) { send_key "alt-n"; }
-        }
-    }
-
     # Storage NG introduces a new partitioning dialog. We detect this
     # by the existence of the "Guided Setup" button and set the
     # STORAGE_NG variable so later tests know about this.

@@ -10,6 +10,7 @@
 # All of cases is based on the reference:
 # https://www.suse.com/documentation/sles-15/singlehtml/book_sle_admin/book_sle_admin.html#id-1.3.3.6.13.6.34
 #
+# Package: yast2-users yast2-nis-client ypbind yp-tools
 # Summary: manages user accounts
 #     Requirement: external NIS server "wotan.suse.de"
 #     Key Steps:
@@ -34,7 +35,7 @@ sub run {
     if (script_run("yast users add username=test_yast password=suse") != 0) {
         record_soft_failure("bsc#1143516 for SLE15+: exit code is NOT zero");
     }
-    validate_script_output("yast users list local 2>&1 || echo BUG#1143516", sub { (m/test_yast/) and ((m/^BUG#1143516$/m) ? (!record_soft_failure("bsc#1143516 for SLE12SP2: exit code is NOT zero")) : return 1) });
+    validate_script_output("yast users list local 2>&1 || echo BUG#1143516", sub { (m/test_yast/) and ((m/^BUG#1143516$/m) ? (!record_soft_failure("bsc#1143516 for SLE12SP2: exit code is NOT zero")) : return 1) }, timeout => 150);
 
     # changes the passwd of the new user and homedir, and delete this user
     assert_script_run("yast users edit username=test_yast new_uid=44444 home=/tmp/test_yast");

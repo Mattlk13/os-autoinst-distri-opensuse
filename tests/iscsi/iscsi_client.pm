@@ -7,6 +7,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: yast2-iscsi-client open-iscsi lsscsi util-linux e2fsprogs
 # Summary: Test suite for iSCSI server and client
 #    Multimachine testsuites, server test creates iscsi target and client test uses it
 # - Configure a static network and test connectivity
@@ -43,8 +44,8 @@ sub initiator_service_tab {
             );
         } else {
             change_service_configuration(
-                after_writing => {start         => 'alt-f'},
-                after_reboot  => {start_on_boot => 'alt-a'}
+                after_writing => {start           => 'alt-f'},
+                after_reboot  => {start_on_demand => 'alt-a'}
             );
         }
     }
@@ -69,7 +70,7 @@ sub initiator_discovered_targets_tab {
     # next and press connect button
     send_key "alt-n";
     assert_and_click 'iscsi-initiator-connect-button';
-    assert_screen 'iscsi-initiator-connect-manual';
+    send_key_until_needlematch 'iscsi-initiator-connect-automatic', 'down';
     send_key 'alt-o';
     assert_screen 'iscsi-initiator-discovery-enable-login-auth';
     send_key 'alt-u';
@@ -101,11 +102,10 @@ sub initiator_connected_targets_tab {
 
 
 sub run {
-    my $self = shift;
     prepare_xterm_and_setup_static_network(ip => $test_data->{initiator_conf}->{ip}, message => 'Configure MM network - client');
     mutex_wait('iscsi_target_ready', undef, 'Target configuration in progress!');
     record_info 'Target Ready!', 'iSCSI target is configured, start initiator configuration';
-    my $module_name = $self->launch_yast2_module_x11('iscsi-client', target_match => 'iscsi-client');
+    my $module_name = y2_module_guitest::launch_yast2_module_x11('iscsi-client', target_match => 'iscsi-client');
     initiator_service_tab;
     initiator_discovered_targets_tab;
     initiator_connected_targets_tab;
@@ -116,6 +116,7 @@ sub run {
     record_info 'Systemd', 'Verify status of iscsi services and sockets';
     systemctl("is-active iscsid.service");
     systemctl("is-active iscsid.socket");
+    systemctl("is-active iscsiuio.socket");
     if (!is_sle('=12-SP4') && !is_sle('=12-SP5')) {
         systemctl("is-active iscsi.service");
     }
@@ -150,7 +151,7 @@ sub run {
     record_info 'Logout iSCSI', 'Logout iSCSI sessions & unmount LUN';
     assert_script_run 'iscsiadm --mode node --logoutall=all';
     assert_script_run 'umount /mnt';
-    type_string "killall xterm\n";
+    enter_cmd "killall xterm";
 }
 
 sub post_fail_hook {

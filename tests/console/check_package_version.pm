@@ -1,4 +1,4 @@
-# Copyright (C) 2019 SUSE LLC
+# Copyright (C)2019-2020 SUSE LLC
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@
 # You should have received a copy of the GNU General Public License along
 # with this program; if not, see <http://www.gnu.org/licenses/>.
 #
-# Summary: Check package version only for sles12sp5 migration scenarios
+# Summary: Compare package version with its expected version for SLE15SP3.
 # Maintainer: Yutao Wang <yuwang@suse.com>
 
 use base "basetest";
@@ -25,43 +25,47 @@ use utils qw(systemctl zypper_call);
 use Mojo::Util 'trim';
 
 my %package = (
-    autofs                 => ['5.1.3',  'jsc#5754'],
-    openscap               => ['1.3.0',  'jsc#5699'],
-    augeas                 => ['1.0.0',  'jsc#5739'],
-    'freeradius-server'    => ['3.0.18', 'jsc#5892'],
-    gpgme                  => ['1.5.1',  'jsc#5953'],
-    'libgpg-error0'        => ['1.17',   'jsc#5953'],
-    rsync                  => ['3.1.3',  'jsc#5584'],
-    python36               => ['3.6.0',  'jsc#7100'],
-    'python-python-daemon' => ['1.6',    'jsc#5708']
+    postgresql13 => '13.0.0',
+    python39     => '3.9.0',
+    python3      => '3.6.0',
+    mariadb      => '10.0.0'
 );
 
-my %package_s390x = (
-    'libnuma-devel' => ['2.0.12', 'jsc#6508'],
+my %locpak = (
+    postgresql12 => "SLE-Module-Legacy"
 );
 
 sub cmp_version {
     my ($old, $new) = @_;
-    my @newv = split(/-/, $new);
-    my $v1   = version->parse($old);
-    my $v2   = version->parse($newv[0]);
+    my @newv = split(qr/-|\+/, $new);
+    $newv[0] =~ s/[a-zA-Z]//g;
+    my $v1 = version->parse($old);
+    my $v2 = version->parse($newv[0]);
     return $v1 <= $v2;
 }
 
 sub cmp_packages {
-    my ($pcks, $pckv, $jsc) = @_;
+    my ($pcks, $pckv) = @_;
     record_info($pcks, "$pcks version check after migration");
-    my $output = script_output("zypper se -xs $pcks | grep -w $pcks | head -1 | awk -F '|' '{print \$4}'", proceed_on_failure => 1, 100);
+    my $output = script_output("zypper se -xs $pcks | grep -w $pcks | head -1 | awk -F '|' '{print \$4}'", 100, proceed_on_failure => 1);
     my $out    = '';
     for my $line (split(/\r?\n/, $output)) {
-        if (trim($line) =~ m/^\d+\.\d+(\.\d+)?(-\d+\.\d+)?$/) {
+        if (trim($line) =~ m/^\d+\.\d+(\.\d+)?/) {
             $out = $line;
-            record_soft_failure("$jsc, The $pcks version is $out, but request is $pckv") if (!cmp_version($pckv, $out));
+            record_info("Package version", "The $pcks version is $out, but request is $pckv", result => 'fail') if (!cmp_version($pckv, $out));
         }
     }
     if ($out eq '') {
-        record_soft_failure("$jsc, The $pcks is not existed");
+        record_info("Package version", "The $pcks is not existed", result => 'fail');
     }
+}
+
+sub loc_packages {
+    my ($pac, $loc) = @_;
+    record_info($pac, "$pac check package location");
+    my $output = script_output("zypper se -xs $pac | grep -w $pac | head -1 | awk -F '|' '{print \$6}'", 100, proceed_on_failure => 1);
+    diag "location:" . $output;
+    record_info("Location", "$loc doesn't have package $pac", result => 'fail') if ($output !~ /$loc/);
 }
 
 sub run {
@@ -69,20 +73,13 @@ sub run {
     select_console 'root-console';
 
     foreach my $key (keys %package) {
-        my $pcks = cmp_packages($key, $package{$key}[0], $package{$key}[1]);
+        my $pcks = cmp_packages($key, $package{$key});
     }
 
-    # Those modules only can be installed at s390x
-    if (get_var('ARCH') =~ /s390x/) {
-        foreach my $key (keys %package_s390x) {
-            my $pcks = cmp_packages($key, $package_s390x{$key}[0], $package_s390x{$key}[1]);
-        }
+    foreach my $key (keys %locpak) {
+        loc_packages($key, $locpak{$key});
     }
 
-    # jsc#5668:Replace init script of ebtables with systemd service file
-    zypper_call('in ebtables');
-    systemctl 'start ebtables';
-    systemctl 'is-active ebtables';
 }
 
 sub test_flags {

@@ -31,6 +31,18 @@ sub assert_script_run_container {
     assert_script_run("systemd-run -tM $machine /bin/bash -c \"$script\"");
 }
 
+=head2 script_run_container
+
+ script_run_container($machine, $script);
+
+Run C<$script> in the systemd-nspawn container called C<$machine>.
+
+=cut
+sub script_run_container {
+    my ($self, $machine, $script) = @_;
+    return script_run("systemd-run -tM $machine /bin/bash -c \"$script\"");
+}
+
 =head2 start_nspawn_container
 
  start_nspawn_container($machine);
@@ -40,7 +52,7 @@ Start the systemd-nspawn container called C<$machine>.
 =cut
 sub start_nspawn_container {
     my ($self, $machine) = @_;
-    assert_script_run("systemctl start systemd-nspawn-openqa@" . $machine);
+    assert_script_run("systemctl start systemd-nspawn@" . $machine);
 }
 
 =head2 restart_nspawn_container
@@ -52,8 +64,8 @@ Restart the systemd-nspawn container called C<$machine>.
 =cut
 sub restart_nspawn_container {
     my ($self, $machine) = @_;
-    assert_script_run("systemctl stop systemd-nspawn-openqa@" . $machine);
-    assert_script_run("systemctl start systemd-nspawn-openqa@" . $machine);
+    assert_script_run("systemctl stop systemd-nspawn@" . $machine);
+    assert_script_run("systemctl start systemd-nspawn@" . $machine);
 }
 
 =head2 setup_nspawn_container
@@ -67,57 +79,26 @@ the packages listed in C<$packages>.
 =cut
 sub setup_nspawn_container {
     my ($self, $machine, $repo, $packages) = @_;
+    my $systemd_nspawn_file = "
+[Exec]
+Boot=yes
+PrivateUsers=no
+Timezone=off
+
+[Files]
+PrivateUsersChown=no
+Bind=/dev/sr0
+
+[Network]
+Bridge=br0
+";
+    assert_script_run("mkdir -p /etc/systemd/nspawn/");
+    $self->write_file("/etc/systemd/nspawn/$machine.nspawn", $systemd_nspawn_file);
     my $path = "/var/lib/machines/$machine";
     assert_script_run("mkdir $path");
     zypper_call("--root $path --gpg-auto-import-keys addrepo $repo defaultrepo");
     zypper_call("--root $path --gpg-auto-import-keys refresh");
     zypper_call("--root $path install --no-recommends -ly $packages", exitcode => [0, 107]);
-}
-
-=head2 setup_nspawn_unit
-
- setup_nspawn_unit();
-
-Create a custom systemd service unit file called C<systemd-nspawn-openqa@.service>.
-This will have some custom config that is needed for our tests
-(eg. bridged network and binding C</dev/sr0> to access the DVD drive from within the container).
-
-=cut
-sub setup_nspawn_unit {
-    my ($self) = @_;
-    my $systemd_nspawn_openqa_service = "
-[Unit]
-Description=Container %i
-Documentation=man:systemd-nspawn(1)
-PartOf=machines.target
-Before=machines.target
-After=network.target systemd-resolved.service
-RequiresMountsFor=/var/lib/machines
-
-[Service]
-ExecStart=/usr/bin/systemd-nspawn --quiet --keep-unit --boot --link-journal=try-guest --network-bridge=br0 --bind /dev/sr0 --settings=override --machine=%i
-KillMode=mixed
-Type=notify
-RestartForceExitStatus=133
-SuccessExitStatus=133
-Slice=machine.slice
-Delegate=yes
-TasksMax=16384
-
-DevicePolicy=closed
-DeviceAllow=/dev/net/tun rwm
-DeviceAllow=char-pts rw
-
-# nspawn itself needs access to /dev/loop-control and /dev/loop, to
-# implement the --image= option. Add these here, too.
-DeviceAllow=/dev/loop-control rw
-DeviceAllow=block-loop rw
-DeviceAllow=block-blkext rw
-
-[Install]
-WantedBy=machines.target
-";
-    $self->write_file("/etc/systemd/system/systemd-nspawn-openqa@.service", $systemd_nspawn_openqa_service);
 }
 
 =head2 write_container_file
@@ -143,7 +124,7 @@ Helper function to write a file at path (including filename) C<$file> with the c
 =cut
 sub write_file {
     my ($self, $file, $content) = @_;
-    type_string("cat > $file <<EOF\n$content\nEOF\n");
+    enter_cmd("cat > $file <<EOF\n$content\nEOF");
     assert_script_run("test \$? == 0");
 }
 
@@ -177,7 +158,7 @@ redirected to the host system journal.
 sub export_container_journal {
     my ($self, $machine) = @_;
 
-    assert_script_run("journalctl -M $machine --no-pager -b 0 > /tmp/" . $machine . "_journal.log");
+    assert_script_run("journalctl -M $machine --no-pager -b 0 -o short-precise > /tmp/" . $machine . "_journal.log");
     upload_logs "/tmp/" . $machine . "_journal.log";
 }
 

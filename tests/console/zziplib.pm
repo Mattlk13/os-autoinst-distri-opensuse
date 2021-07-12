@@ -1,12 +1,13 @@
 # SUSE"s openQA tests
 #
-# Copyright © 2019 SUSE LLC
+# Copyright © 2019-2020 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: libzzip-0-13 zziplib-devel zip
 # Summary: test that uses zip command line tool to regression test.
 # If succeed, the test passes without error.
 # - Add SDK repository if necessary (devel package necessary for test)
@@ -29,7 +30,9 @@ use version_utils 'is_sle';
 
 sub run {
     my $filezip = "files.zip";
-    select_console "root-console";
+    my $self    = shift;
+    $self->select_serial_terminal;
+
     # development module needed for dependencies, released products are tested with sdk module
     if (!main_common::is_updates_tests()) {
         cleanup_registration;

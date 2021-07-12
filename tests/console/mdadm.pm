@@ -1,12 +1,13 @@
 # SUSE's openQA tests
 #
-# Copyright © 2018 SUSE LLC
+# Copyright © 2018-2020 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: mdadm
 # Summary: mdadm test, run script creating RAID 0, 1, 5, re-assembling and replacing faulty drive
 # - Fetch mdadm.sh from datadir
 # - Execute bash mdadm.sh |& tee mdadm.log
@@ -20,7 +21,8 @@ use strict;
 use warnings;
 
 sub run {
-    select_console 'root-console';
+    my $self = shift;
+    $self->select_serial_terminal;
 
     assert_script_run 'wget ' . data_url('qam/mdadm.sh');
     if (is_sle('<15')) {

@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright © 2019 SUSE LLC
+# Copyright © 2019-2021 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -11,7 +11,7 @@
 # schedule them depending on the environment variables.
 # The solution is implemented to use in declarative scheduling which does not
 # allow to use complex conditions.
-# Maintainer: Oleksandr Orlov <oorlov@suse.de>
+# Maintainer: QE YaST <qa-sle-yast@suse.de>
 
 package bootloader_start;
 use strict;
@@ -36,15 +36,18 @@ use boot_from_pxe;
 sub run {
     my $self = shift;
     if (uses_qa_net_hardware() || get_var("PXEBOOT")) {
+        record_info('boot_from_pxe');
         $self->boot_from_pxe::run();
         return;
     }
     if (is_s390x()) {
         if (check_var("BACKEND", "s390x")) {
+            record_info('bootloader_s390x');
             $self->bootloader_s390::run();
             return;
         }
         else {
+            record_info('bootloader_zkvm');
             $self->bootloader_zkvm::run();
             return;
         }
@@ -52,26 +55,36 @@ sub run {
     if (check_var('BACKEND', 'svirt') && is_x86_64()) {
         set_bridged_networking();
         if (is_hyperv()) {
+            record_info('bootloader_hyperv');
             $self->bootloader_hyperv::run();
         }
         else {
+            record_info('bootloader_svirt');
             $self->bootloader_svirt::run();
         }
+        # In mediacheck we do selection from the bootmenu in installation/mediacheck
+        # As normally we also need `bootloader` for this scenario
+        return if get_var('MEDIACHECK');
     }
     # Load regular bootloader for all qemu backends and for x84_86 systems,
     # except Xen PV as id does not have VNC (bsc#961638).
     if (check_var('BACKEND', 'qemu') || (check_var('BACKEND', 'svirt') && !(check_var('VIRSH_VMM_FAMILY', 'xen') && check_var('VIRSH_VMM_TYPE', 'linux')))) {
         if (get_var('UEFI')) {
-            $self->bootloader_uefi::run();
-            return;
+            unless (get_var('BOOT_HDD_IMAGE')) {
+                record_info('bootloader_uefi');
+                $self->bootloader_uefi::run();
+                return;
+            }
         }
         else {
+            record_info('bootloader');
             $self->bootloader::run();
             return;
         }
     }
     # Wrapped call for powerVM
     if (get_var('BACKEND', '') =~ /spvm|pvm_hmc/) {
+        record_info('bootloader');
         $self->bootloader::run();
         return;
     }

@@ -1,11 +1,12 @@
 name:           modify_existing_partition_opensuse
 description:    >
   Installation where we modify some pre-existing partitions. Must depend on some create_hdd test suite.
-
+vars:
+  YUI_REST_API: 1
 schedule:
-  - installation/isosize
   - installation/bootloader_start
-  - installation/welcome
+  - installation/setup_libyui
+  - installation/licensing/accept_license
   - installation/online_repos
   - installation/installation_mode
   - installation/logpackages
@@ -13,7 +14,7 @@ schedule:
   - installation/partitioning
   - installation/partitioning/modify_existing_partition
   - installation/installer_timezone
-  - installation/user_settings
+  - installation/authentication/default_user_simple_pwd
   - installation/resolve_dependency_issues
   - installation/installation_overview
   - installation/disable_grub_timeout
@@ -26,4 +27,4 @@ schedule:
   - console/validate_modify_existing_partition
 
 test_data:
-  !include: test_data/yast/modify_existing_partition/modify_existing_partition.yaml
+  <<: !include test_data/yast/modify_existing_partition/modify_existing_partition.yaml

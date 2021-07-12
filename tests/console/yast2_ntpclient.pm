@@ -1,12 +1,13 @@
 # SUSE's openQA tests
 #
-# Copyright (c) 2016-2018 SUSE LLC
+# Copyright (c) 2016-2021 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: yast2-ntp-client ntpd chronyd
 # Summary: yast2_ntpclient test
 # Maintainer: Zaoliang Luo <zluo@suse.de>
 
@@ -15,7 +16,7 @@ use warnings;
 use base "y2_module_consoletest";
 
 use testapi;
-use utils qw(type_string_slow zypper_call systemctl);
+use utils qw(enter_cmd_slow zypper_call systemctl);
 use version_utils qw(is_sle is_leap);
 
 sub run {
@@ -74,7 +75,7 @@ sub run {
 
     # change Interval of Synchronization
     send_key $cmd{sync_interval};
-    type_string_slow "1\n";
+    enter_cmd_slow "1";
 
     # check new interval of synchronization time
     assert_screen 'yast2_ntp-client_new_interval';
@@ -87,8 +88,6 @@ sub run {
 
     # select type of synchronization: server, then go next
     if ($is_chronyd) {
-        # we can't select public server (yet!), so we manually enter it
-        record_soft_failure 'bsc#1073326';
         type_string "$ntp_server";
     }
     else {
@@ -124,10 +123,7 @@ sub run {
 
     # run test
     send_key 'alt-t';
-    assert_screen ['bsc#1074726', 'yast2_ntp-client_public_ntp_test'];
-
-    # If NTP server test failed, it's certainly because bsc#1074726 bug
-    record_soft_failure 'bsc#1074726' if (match_has_tag 'bsc#1074726');
+    assert_screen 'yast2_ntp-client_public_ntp_test';
 
     # close it with OK
     my $ntp_client_needle = check_var('USE_SUPPORT_SERVER', 1) ? 'support_server' : 'public';

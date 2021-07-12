@@ -8,6 +8,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: yast2-dns-server bind
 # Summary: Ensure that all combinations of running/stopped and active/inactive can be set for yast2 dns-server
 # Maintainer: jeriveramoya <jeriveramoya@suse.com>
 
@@ -89,7 +90,7 @@ sub run {
     continue_info_network_manager_default;
     if ($older_products) {
         assert_screen 'yast2-service-stopped-enabled';
-        send_key 'alt-s';    # Start the service
+        send_key 'alt-s';                           # Start the service
         assert_screen 'yast2-service-running-enabled';
         wait_screen_change { send_key 'alt-t' };    # Disable the service and finish
     }
@@ -125,7 +126,7 @@ sub run {
     systemctl 'is-active named',  expect_false => 1;
     systemctl 'is-enabled named', expect_false => 1;
 
-    return if $older_products;                                 # only for new products as cancel do not revert changes in services status
+    return if $older_products;    # only for new products as cancel do not revert changes in services status
     record_info '5th run',         '[tree-based interface] -> service in same status than previous run';
     script_run 'yast2 dns-server', 0;
     continue_info_network_manager_default;

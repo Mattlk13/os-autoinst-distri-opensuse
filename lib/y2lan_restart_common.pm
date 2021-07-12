@@ -5,7 +5,7 @@ Library for non-destructive testing using yast2 lan.
 =cut
 # SUSE's openQA tests
 #
-# Copyright © 2016-2018 SUSE LLC
+# Copyright © 2016-2021 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -13,7 +13,7 @@ Library for non-destructive testing using yast2 lan.
 # without any warranty.
 
 # Summary: YaST logic on Network Restart while no config changes were made
-# Maintainer: Joaquín Rivera <jeriveramoya@suse.com>
+# Maintainer: QE YaST <qa-sle-yast@suse.de>
 # Tags: fate#318787 poo#11450
 
 package y2lan_restart_common;
@@ -27,6 +27,7 @@ use version_utils qw(is_sle is_leap);
 use y2_module_basetest qw(accept_warning_network_manager_default is_network_manager_default);
 use y2_module_consoletest;
 use Test::Assert ':all';
+use x11utils "start_root_shell_in_xterm";
 
 our @EXPORT = qw(
   check_etc_hosts_update
@@ -40,11 +41,15 @@ our @EXPORT = qw(
   handle_dhcp_popup
   open_yast2_lan
   close_yast2_lan
+  open_yast2_routing
+  change_ipforward
   wait_for_xterm_to_be_visible
   clear_journal_log
   close_xterm
 );
 my $module_name;
+# Keeping "shutting down|ifdown all" for compatibility with NetworkManager and previous wicked versions.
+my $query_pattern_for_restart = "shutting down|ifdown all|Stopping wicked";
 
 =head2 initialize_y2lan
 
@@ -55,9 +60,7 @@ Initialize yast2 lan. Stop firewalld. Ensure firewalld is stopped. Enable DEBUG.
 =cut
 sub initialize_y2lan
 {
-    select_console 'x11';
-    x11_start_program("xterm -geometry 155x50+5+5", target_match => 'xterm');
-    become_root;
+    start_root_shell_in_xterm();
     # make sure that firewalld is stopped, or we have later pops for firewall activation warning
     # or timeout for command 'ip a' later
     if ((is_sle('15+') or is_leap('15.0+')) and script_run("systemctl show -p ActiveState firewalld.service | grep ActiveState=inactive")) {
@@ -70,9 +73,8 @@ sub initialize_y2lan
       '(WICKED_LOG_LEVEL).*/\1="info"';    # DEBUG configuration for wicked
     assert_script_run 'sed -i -E \'s/' . $debug_conf . '/\' /etc/sysconfig/network/config';
     assert_script_run 'systemctl restart network';
-    # Keeping "shutting down|ifdown all" for compatibility with NetworkManager and previous wicked versions.
-    type_string "journalctl -f|egrep -i --line-buffered 'shutting down|ifdown all|Stopping wicked' > journal.log &\n";
-    assert_script_run '> journal.log';     # clear journal.log
+    enter_cmd "journalctl -f -o short-precise|egrep -i --line-buffered '$query_pattern_for_restart|Reloaded wicked' > journal.log &";
+    clear_journal_log();
 }
 
 =head2 open_network_settings
@@ -85,7 +87,7 @@ Accept warning for Networkmanager controls network device.
 
 =cut
 sub open_network_settings {
-    $module_name = y2_module_consoletest::yast2_console_exec(yast2_module => 'lan');
+    $module_name = y2_module_consoletest::yast2_console_exec(yast2_module => 'lan', extra_vars => get_var('YUI_PARAMS'));
     # 'Global Options' tab is opened after accepting the warning on the systems
     # with Network Manager.
     # Thus, there is no way to select device in Overview tab on such systems, so
@@ -126,7 +128,7 @@ sub close_network_settings {
         wait_serial("$module_name-0", 180) || die "'yast2 lan' didn't finish or exited with non-zero code";
     }
 
-    type_string "\n\n";    # make space for better readability of the console
+    enter_cmd "\n";    # make space for better readability of the console
 }
 
 =head2 check_network_status
@@ -138,7 +140,7 @@ Check network status for device, test connection and DNS. Print journal.log on s
 =cut
 sub check_network_status {
     my ($expected_status, $device) = @_;
-    $expected_status //= 'no_restart';
+    $expected_status //= 'no_restart_or_reload';
     assert_screen 'yast2_closed_xterm_visible', 120;
     assert_script_run 'ip a';
     if ($device eq 'bond') {
@@ -148,15 +150,23 @@ sub check_network_status {
         assert_script_run 'dig suse.com|grep \'status: NOERROR\'';    # test if conection and DNS is working
     }
     assert_script_run 'cat journal.log';                              # print journal.log
-    my $is_empty = script_run('[ -s journal.log ]');
-    if ($is_empty) {
-        assert_equals($expected_status, 'no_restart', "Network restart didn't occur, even though it was expected.");
+    my $journal_findings = script_output('cat journal.log');
+    record_info "$expected_status", "Network status expects $expected_status";
+    if ($expected_status eq 'no_restart_or_reload') {
+        assert_matches(qr/^\s*$/, $journal_findings, "Network service should not have been restarted/reloaded. Check journalctl findings \n$journal_findings\n\n");
+    }
+    elsif ($expected_status eq 'restart') {
+        assert_matches(qr/$query_pattern_for_restart/, $journal_findings, "Network restart was expected. Check journalctl findings \n$journal_findings\n\n");
+    }
+    elsif ($expected_status eq 'reload') {
+        assert_matches(qr/Reloaded wicked/, $journal_findings, "Network reload was expected. Check journalctl findings \n$journal_findings\n\n");
+        assert_not_matches(qr/$query_pattern_for_restart/, $journal_findings, "Network restart happened when reload was expected. Check journalctl findings \n$journal_findings\n\n");
     }
     else {
-        assert_equals($expected_status, 'restart', "Network restart occurred, even though it wasn't expected.");
+        die "$expected_status was not any of the known expected status! Check journalctl findings \n$journal_findings\n\n";
     }
-    assert_script_run '> journal.log';                                # clear journal.log
-    type_string "\n\n";                                               # make space for better readability of the console
+    clear_journal_log();
+    type_string "\n\n";    # make space for better readability of the console
 }
 
 =head2 check_device_state
@@ -174,13 +184,13 @@ sub check_device_state {
 
 =head2 verify_network_configuration
 
- verify_network_configuration([$fn], [$dev_name], [$expected_status], [$workaround], [$no_network_check]);
+ verify_network_configuration([$fn], [$expected_status], [$dev_name], [$workaround], [$no_network_check]);
 
 C<$fn> is a reference to the function with the action to be performed.
 
 C<$dev_name> is device name.
 
-C<$expected_status> can be restart.
+C<$expected_status> can be restart, no_restart or reload. If undef is set to no_restart.
 
 C<$workaround> is workaround.
 
@@ -192,7 +202,7 @@ Check network status C<$expected_status>, C<$workaround> if C<$no_network_check>
 
 =cut
 sub verify_network_configuration {
-    my ($fn, $dev_name, $expected_status, $workaround, $no_network_check) = @_;
+    my ($fn, $expected_status, $dev_name, $workaround, $no_network_check) = @_;
     open_network_settings;
 
     $fn->($dev_name) if $fn;    # verify specific action
@@ -251,7 +261,7 @@ sub set_network {
         assert_screen 'yast2_lan_static_ip_set';
     }
     else {
-        send_key 'alt-y';                                                       # set back to DHCP
+        send_key 'alt-y';    # set back to DHCP
         assert_screen 'yast2_lan_dhcp_set';
     }
     # Exit
@@ -320,7 +330,7 @@ Confirm if a warning popup for Networkmanager controls networking.
 
 =cut
 sub handle_Networkmanager_controlled {
-    assert_screen "Networkmanager_controlled";
+    assert_screen 'Networkmanager_controlled', 300;
     send_key "ret";    # confirm networkmanager popup
     assert_screen "Networkmanager_controlled-approved";
     send_key "alt-c";
@@ -342,6 +352,39 @@ sub handle_dhcp_popup {
     if (match_has_tag('dhcp-popup')) {
         wait_screen_change { send_key 'alt-o' };
     }
+}
+
+=head2 open_yast2_routing
+
+ open_yast2_routing();
+
+Open yast2 routing
+
+=cut
+sub open_yast2_routing {
+    $module_name = y2_module_consoletest::yast2_console_exec(yast2_module => 'routing');
+    assert_screen "yast2_routing", 120;
+}
+
+=head2 change_ipforward
+
+ change_ipforward([$state], [$should_conflict]);
+
+C<$state> enabled/disabled will used to set the expected needle to match
+C<$should_conflict> 1 means conflict is expected or 0 otherwise
+
+Open routing module and enable or disable ip_forwarding
+
+=cut
+sub change_ipforward {
+    my %options = @_;
+    open_yast2_routing();
+    send_key 'spc';
+    assert_screen "ipv4_forwarding_$options{state}";
+    send_key 'alt-n', wait_screen_change => 1;
+    assert_screen "sysctl_ip_forward_conflict" if ($options{should_conflict});
+    send_key 'alt-o';
+    wait_serial("yast2-routing-status-0", 180) || die "'yast2-routing' didn't finish";
 }
 
 =head2 open_yast2_lan
@@ -395,7 +438,7 @@ so that the existing logs will not interfere with the new ones.
 
 =cut
 sub clear_journal_log {
-    type_string "\n\n";
+    enter_cmd "\n";
     assert_script_run '> journal.log';
 }
 
@@ -424,7 +467,7 @@ further tests.
 
 =cut
 sub close_xterm {
-    type_string "killall xterm\n";
+    enter_cmd "killall xterm";
 }
 
 1;

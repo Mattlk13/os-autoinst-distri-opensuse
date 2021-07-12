@@ -89,7 +89,7 @@ sub test_run {
 sub log_add {
     my ($file, $name, $status, $time) = @_;
     my $cmd = "echo '$name ... ... $status (${time}s)' >> $file && sync $file";
-    type_string("\n");
+    send_key 'ret';
     assert_script_run($cmd);
 }
 
@@ -97,6 +97,8 @@ sub run {
     my $self = shift;
     select_console('root-console');
 
+    assert_script_run('cd ' . get_var('WORK_DIR'));
+    assert_script_run('btrfs version | tee ' . STATUS_LOG);
     for my $category (@category) {
         assert_script_run('mkdir -p ' . LOG_DIR . $category);
 

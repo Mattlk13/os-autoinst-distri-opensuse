@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright © 2019 SUSE LLC
+# Copyright © 2019-2021 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -9,7 +9,7 @@
 
 # Summary: The class introduces business actions for Libstorage Expert
 # Partitioner.
-# Maintainer: Oleksandr Orlov <oorlov@suse.de>
+# Maintainer: QE YaST <qa-sle-yast@suse.de>
 
 package Installation::Partitioner::Libstorage::ExpertPartitionerController;
 use strict;
@@ -132,10 +132,15 @@ sub add_raid {
     $self->_finish_partition_creation();
 }
 
+sub accept_changes_and_press_next {
+    my ($self) = @_;
+    $self->accept_changes();
+    $self->get_suggested_partitioning_page()->press_next();
+}
+
 sub accept_changes {
     my ($self) = @_;
     $self->get_expert_partitioner_page()->press_accept_button();
-    $self->get_suggested_partitioning_page()->press_next();
 }
 
 

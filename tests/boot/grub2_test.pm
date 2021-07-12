@@ -25,7 +25,7 @@ use utils qw(zypper_call zypper_ar);
 use version_utils 'is_sle';
 
 sub reboot {
-    type_string "reboot\n";
+    enter_cmd "reboot";
     reset_consoles;
     assert_screen 'grub2', 120;
     stop_grub_timeout;
@@ -52,11 +52,18 @@ sub run {
     assert_script_run 'grep CMDLINE /etc/default/grub';
     record_info 'grub2 menu entry', 'install another kernel, boot the previous one';
     zypper_call 'in -t pattern yast2_basis' if is_sle('15+');
-    zypper_ar 'http://download.suse.de/ibs/Devel:/Kernel:/master/standard/', name => 'KERNEL_DEVEL';
+    if (is_sle('15-sp2+')) {
+        zypper_ar "http://download.suse.de/ibs/Devel:/Kernel:/vanilla/standard/", name => 'KERNEL_DEVEL';
+    }
+    else {
+        my $LTSS    = get_var('SCC_REGCODE_LTSS') ? '-LTSS' : '';
+        my $version = get_var('VERSION') . $LTSS;
+        zypper_ar "http://download.suse.de/ibs/Devel:/Kernel:/SLE$version/standard/", name => 'KERNEL_DEVEL';
+    }
     zypper_call 'in kernel-vanilla';
     assert_script_run 'uname -r >kernel.txt';
+    my $boot_entry = script_output(q(grub2-once --list | grep $(uname -r) | grep -v 'recovery mode' | awk '{print $1}'));
     reboot;
-    my $boot_entry = is_sle('=12-sp2') || is_sle('=12-sp3') ? '5' : '3';
     boot_grub_item(2, $boot_entry);
     assert_screen 'linux-login', 200;
     select_console 'root-console';
@@ -69,9 +76,9 @@ sub run {
 
     record_info 'grub2 command line', 'ls /boot and help command';
     send_key 'c';
-    type_string "ls /boot\n";
+    enter_cmd "ls /boot";
     assert_screen 'grub2-command-line-ls';
-    type_string "help\n";
+    enter_cmd "help";
     assert_screen 'grub2-command-line-help';
     send_key 'esc';
     sleep 1;

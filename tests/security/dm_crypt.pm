@@ -13,6 +13,7 @@
 # You should have received a copy of the GNU General Public License along
 # with this program; if not, see <http://www.gnu.org/licenses/>.
 #
+# Package: cryptsetup
 # Summary: Test dm-crypt cipher support with cryptsetup tool. Make sure
 #          unsafe algorithms are not applicable in FIPS or non-FIPS mode.
 # Maintainer: Ben Chou <bchou@suse.com>
@@ -62,7 +63,7 @@ sub run {
         {name => "aes",     mode => "xts-plain",   hash => "sha512"},
         {name => "aes",     mode => "cbc-plain64", hash => "sha256"},
         {name => "serpent", mode => "xts-plain64", hash => "sha256", no_fips => 1},
-        {name => "twofish", mode => "cbc-plain64", hash => "sha1", no_fips => 1},
+        {name => "twofish", mode => "cbc-plain64", hash => "sha1",   no_fips => 1},
     );    # Not all the combinations will be checked here
 
     foreach my $c (@check_list) {

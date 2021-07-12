@@ -8,6 +8,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: evince
 # Summary: Evince: Rotate and Zoom
 # - Launch evince and open test.pdf from datadir
 # - Send CTRL-LEFT (rotate left) and check
@@ -29,7 +30,7 @@ use testapi;
 sub run {
     x11_start_program("evince " . autoinst_url . "/data/x11/test.pdf", valid => 0);
 
-    send_key "ctrl-left";    # rotate left
+    send_key "ctrl-left";     # rotate left
     assert_screen 'evince-rotate-left', 5;
     send_key "ctrl-right";
     send_key "ctrl-right";    # rotate right

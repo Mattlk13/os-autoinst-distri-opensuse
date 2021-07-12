@@ -7,6 +7,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: MozillaThunderbird
 # Summary: Thunderbird installation
 # - Go to text console
 # - Stop packagekit
@@ -25,7 +26,7 @@ sub run {
 
     select_console 'root-console';
 
-    pkcon_quit;
+    quit_packagekit;
     zypper_call("in MozillaThunderbird", exitcode => [0, 102, 103]);
 
     select_console 'x11';

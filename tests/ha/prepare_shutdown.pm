@@ -7,17 +7,18 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: crmsh
 # Summary: Do some actions prior to the shutdown
 # Maintainer: Loic Devulder <ldevulder@suse.com>
 
 use base 'opensusebasetest';
 use strict;
 use warnings;
-use utils 'systemctl';
+use testapi;
 
 sub run {
-    # We need to stop pacemaker to avoid fencing during shutdown
-    systemctl 'stop pacemaker.service';
+    # We need to stop the cluster stack to avoid fencing during shutdown
+    assert_script_run("crm cluster stop");
 }
 
 1;

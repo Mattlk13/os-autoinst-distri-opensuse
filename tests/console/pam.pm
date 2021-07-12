@@ -1,12 +1,13 @@
 # SUSE's openQA tests
 #
-# Copyright © 2019 SUSE LLC
+# Copyright © 2019-2020 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 #
+# Package: bats pam-test pam pam-config snapper perl
 # Summary: This PM is to run a suite of tests about PAM, and gets a TAP
 #          format result. Four files(pam.sh, pam_test, pam_test.sh,
 #          system-default) are included. pam.sh is a "bats" script, and
@@ -26,10 +27,11 @@ use strict;
 use warnings;
 use testapi;
 use utils;
-use version_utils qw(is_leap is_sle);
+use version_utils;
 
 sub run {
-    select_console 'root-console';
+    my $self = shift;
+    $self->select_serial_terminal;
 
     die "This test module is not enabled for openSUSE Leap yet" if is_leap();
     my $version = get_required_var('VERSION');
@@ -37,7 +39,10 @@ sub run {
         my $qa_head_repo = "http://download.suse.de/ibs/QA:/Head/" . 'SLE-' . $version;
         zypper_ar("$qa_head_repo", name => 'qa-head-repo');
     }
-    zypper_call('install bats pam-test pam pam-config snapper');
+    zypper_call('install bats pam-test pam pam-config snapper perl');
+    if (is_tumbleweed()) {
+        zypper_call('install pam-deprecated "group(wheel)"');
+    }
 
     # create a snapshot for rollback
     assert_script_run("snapbf=\$(snapper create -p -d 'before pam test')");

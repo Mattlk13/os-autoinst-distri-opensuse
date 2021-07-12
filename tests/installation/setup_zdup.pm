@@ -16,12 +16,13 @@ use strict;
 use warnings;
 use testapi;
 use utils;
-use version_utils 'is_jeos';
+use version_utils qw(is_jeos is_desktop_installed is_leap);
+use Utils::Backends 'is_pvm';
 
 sub run {
     my ($self) = @_;
 
-    $self->wait_boot(ready_time => 600) unless is_jeos;
+    $self->wait_boot(textmode => !is_desktop_installed(), bootloader_time => 300, ready_time => 600) unless is_jeos;
     if (get_var('ZDUP_IN_X')) {
         x11_start_program('xterm');
         become_root;
@@ -50,14 +51,23 @@ sub run {
             # https://bugzilla.redhat.com/show_bug.cgi?id=1075131
             systemctl 'set-default --force multi-user.target';
             # The CD was ejected in the bootloader test
-            type_string("/sbin/reboot\n");
+            enter_cmd("/sbin/reboot");
 
             reset_consoles;
-            $self->wait_boot(textmode => 1);
+            reconnect_mgmt_console if is_pvm;
+            $self->wait_boot(textmode => 1, bootloader_time => 200);
 
             select_console('root-console');
         }
 
+    }
+    # starting from 15.3, core binary RPMs was inherited from SLE build directly
+    # allowing the vendor change during migration is needed
+    # the change below also exists in openSUSE-release package
+    if (is_leap('>15.2')) {
+        assert_script_run "mkdir -p /etc/zypp/vendors.d";
+        assert_script_run "echo -e \"[main]\nvendors=openSUSE,SUSE,SUSE LLC\n\" > /etc/zypp/vendors.d/00-openSUSE.conf";
+        clear_console;
     }
 
 }

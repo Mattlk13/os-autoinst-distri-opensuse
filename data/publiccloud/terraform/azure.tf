@@ -1,5 +1,18 @@
+terraform {
+  required_providers {
+    azurerm = {
+      version = "= 2.56.0"
+      source = "hashicorp/azurerm"
+    }
+    random = {
+      version = "= 3.1.0"
+      source = "hashicorp/random"
+    }
+  }
+}
+
 provider "azurerm" {
-   version = "<= 1.33"
+    features {}
 }
 
 variable "instance_count" {
@@ -20,6 +33,14 @@ variable "region" {
 
 variable "image_id" {
     default = ""
+}
+
+variable "offer" {
+    default=""
+}
+
+variable "sku" {
+    default="gen1"
 }
 
 variable "extra-disk-size" {
@@ -58,8 +79,8 @@ resource "azurerm_resource_group" "openqa-group" {
 
     tags = merge({
             openqa_created_by = var.name
-            openqa_created_date = "${timestamp()}"
-            openqa_created_id = "${element(random_id.service.*.hex, 0)}"
+            openqa_created_date = timestamp()
+            openqa_created_id = element(random_id.service.*.hex, 0)
         }, var.tags)
 }
 
@@ -74,7 +95,7 @@ resource "azurerm_subnet" "openqa-subnet" {
     name                 = "${azurerm_resource_group.openqa-group.name}-subnet"
     resource_group_name  = azurerm_resource_group.openqa-group.name
     virtual_network_name = azurerm_virtual_network.openqa-network.name
-    address_prefix       = "10.0.1.0/24"
+    address_prefixes       = ["10.0.1.0/24"]
 }
 
 resource "azurerm_public_ip" "openqa-publicip" {
@@ -103,11 +124,15 @@ resource "azurerm_network_security_group" "openqa-nsg" {
     }
 }
 
+resource "azurerm_subnet_network_security_group_association" "openqa-net-sec-association" {
+    subnet_id                   = azurerm_subnet.openqa-subnet.id
+    network_security_group_id   = azurerm_network_security_group.openqa-nsg.id
+}
+
 resource "azurerm_network_interface" "openqa-nic" {
     name                      = "${var.name}-${element(random_id.service.*.hex, count.index)}-nic"
     location                  = var.region
     resource_group_name       = azurerm_resource_group.openqa-group.name
-    network_security_group_id = azurerm_network_security_group.openqa-nsg.id
     count                     = var.instance_count
 
     ip_configuration {
@@ -122,6 +147,7 @@ resource "azurerm_image" "image" {
     name                      = "${azurerm_resource_group.openqa-group.name}-disk1"
     location                  = var.region
     resource_group_name       = azurerm_resource_group.openqa-group.name
+    count = var.image_id != "" ? 1 : 0
 
     os_disk {
         os_type = "Linux"
@@ -131,55 +157,56 @@ resource "azurerm_image" "image" {
     }
 }
 
-resource "azurerm_virtual_machine" "openqa-vm" {
-    name                  = "${var.name}-${element(random_id.service.*.hex, count.index)}"
-    location              = var.region
-    resource_group_name   = azurerm_resource_group.openqa-group.name
-    network_interface_ids = ["${azurerm_network_interface.openqa-nic[count.index].id}"]
-    vm_size               = var.type
-    count                 = var.instance_count
+resource "azurerm_linux_virtual_machine" "openqa-vm" {
+  name                = "${var.name}-${element(random_id.service.*.hex, count.index)}"
+  resource_group_name = azurerm_resource_group.openqa-group.name
+  location            = var.region
+  size                = var.type
+  computer_name  = "${var.name}-${element(random_id.service.*.hex, count.index)}"
+  admin_username      = "azureuser"
+  disable_password_authentication = true
 
-    storage_image_reference {
-        id = azurerm_image.image.id
+  count                 = var.instance_count
+
+  network_interface_ids = [azurerm_network_interface.openqa-nic[count.index].id]
+
+  tags = merge({
+          openqa_created_by = var.name
+          openqa_created_date = timestamp()
+          openqa_created_id = element(random_id.service.*.hex, count.index)
+      }, var.tags)
+
+  admin_ssh_key {
+    username   = "azureuser"
+    public_key = file("/root/.ssh/id_rsa.pub")
+  }
+
+  os_disk {
+    name              = "${var.name}-${element(random_id.service.*.hex, count.index)}-osdisk"
+    caching              = "ReadWrite"
+    storage_account_type = "Standard_LRS"
+  }
+
+  source_image_id =  var.image_id != "" ? azurerm_image.image.0.id : null
+  dynamic "source_image_reference" {
+    for_each = range(var.image_id != "" ? 0 : 1)
+    content {
+      publisher = var.image_id != "" ? "" : "SUSE"
+      offer     = var.image_id != "" ? "" : var.offer
+      sku       = var.image_id != "" ? "" : var.sku
+      version   = var.image_id != "" ? "" : "latest"
     }
+  }
 
-    storage_os_disk {
-        name              = "${var.name}-${element(random_id.service.*.hex, count.index)}-osdisk"
-        caching           = "ReadWrite"
-        create_option     = "FromImage"
-        managed_disk_type = "Standard_LRS"
-    }
-
-    os_profile {
-        computer_name  = "${var.name}-${element(random_id.service.*.hex, count.index)}"
-        admin_username = "azureuser"
-    }
-
-    os_profile_linux_config {
-        disable_password_authentication = true
-        ssh_keys {
-            path     = "/home/azureuser/.ssh/authorized_keys"
-            key_data = file("/root/.ssh/id_rsa.pub")
-        }
-    }
-
-    tags = merge({
-            openqa_created_by = var.name
-            openqa_created_date = "${timestamp()}"
-            openqa_created_id = "${element(random_id.service.*.hex, count.index)}"
-        }, var.tags)
-
-
-    boot_diagnostics {
-        enabled = true
-        storage_uri = "https://${var.storage-account}.blob.core.windows.net/"
-    }
+  boot_diagnostics {
+    storage_account_uri = "https://${var.storage-account}.blob.core.windows.net/"
+  }
 }
 
 resource "azurerm_virtual_machine_data_disk_attachment" "default" {
     count              = var.create-extra-disk ? var.instance_count: 0
     managed_disk_id    = element(azurerm_managed_disk.ssd_disk.*.id, count.index)
-    virtual_machine_id = element(azurerm_virtual_machine.openqa-vm.*.id, count.index)
+    virtual_machine_id = element(azurerm_linux_virtual_machine.openqa-vm.*.id, count.index)
     lun                = "1"
     caching            = "ReadWrite"
 }
@@ -196,15 +223,15 @@ resource "azurerm_managed_disk" "ssd_disk" {
 
 
 output "vm_name" {
-    value = "${azurerm_virtual_machine.openqa-vm.*.name}"
+    value = azurerm_linux_virtual_machine.openqa-vm.*.id
 }
 
 data "azurerm_public_ip" "openqa-publicip" {
-    name                = "${azurerm_public_ip.openqa-publicip[count.index].name}"
-    resource_group_name = "${azurerm_virtual_machine.openqa-vm.0.resource_group_name}"
+    name                = azurerm_public_ip.openqa-publicip[count.index].name
+    resource_group_name = azurerm_linux_virtual_machine.openqa-vm.0.resource_group_name
     count               = var.instance_count
 }
 
 output "public_ip" {
-    value = "${data.azurerm_public_ip.openqa-publicip.*.ip_address}"
+    value = data.azurerm_public_ip.openqa-publicip.*.ip_address
 }

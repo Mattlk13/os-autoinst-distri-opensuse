@@ -1,10 +1,11 @@
-# Copyright © 2016-2019 SUSE LLC
+# Copyright © 2016-2021 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: zypper
 # Summary: Patch SLE qcow2 images before migration (offline)
 # Maintainer: Dumitru Gutu <dgutu@suse.de>
 
@@ -17,6 +18,8 @@ use version_utils qw(is_sle is_desktop_installed is_upgrade is_sles4sap);
 use migration;
 use registration;
 use qam;
+use Utils::Backends 'is_pvm';
+use y2_base;
 
 
 sub patching_sle {
@@ -40,10 +43,7 @@ sub patching_sle {
         if (is_sle('12-SP2+')) {
             set_var('HDD_SP2ORLATER', 1);
         }
-        # disable existing repos temporary
-        zypper_call "lr";
-        zypper_call "mr --disable --all";
-        save_screenshot;
+        disable_installation_repos;
         # Set SCC_PROXY_URL if needed
         set_scc_proxy_url if ((check_var('HDDVERSION', get_var('ORIGINAL_TARGET_VERSION')) && is_upgrade()));
         sle_register("register");
@@ -66,9 +66,9 @@ sub patching_sle {
             assert_script_run 'sync', 600;
             # Open gdm debug info for poo#45236, this issue happen sometimes in openqa env
             script_run('sed -i s/#Enable=true/Enable=true/g /etc/gdm/custom.conf');
-            # Workaround for test failed of the reboot operation need to wait some jobs done
-            # Add '-f' to force the reboot to avoid the test be blocked here
-            type_string "reboot -f\n";
+            # Remove '-f' for reboot for poo#65226
+            enter_cmd "reboot";
+            reconnect_mgmt_console if is_pvm;
             $self->wait_boot(textmode => !is_desktop_installed(), ready_time => 600, bootloader_time => 300, nologin => $nologin);
             # Setup again after reboot
             $self->setup_sle();
@@ -92,6 +92,7 @@ sub patching_sle {
 
     #migration with LTSS is not possible, remove it before upgrade
     remove_ltss;
+
     if (get_var('FLAVOR', '') =~ /-(Updates|Incidents)$/ || get_var('KEEP_REGISTERED')) {
         # The system is registered.
         set_var('HDD_SCC_REGISTERED', 1);
@@ -101,16 +102,6 @@ sub patching_sle {
     }
     else {
         sle_register("unregister");
-    }
-
-    # RMT didn't mirror all repos, cannot use enable all
-    if (!get_var("SMT_URL")) {
-        zypper_call("mr --enable --all");
-    }
-
-    # Disable old repositories during AutoYaST driven upgrade
-    if (get_var('AUTOUPGRADE')) {
-        disable_installation_repos;
     }
 
     # Restore the old value of VIDEOMODE and SCC_REGISTER
@@ -150,85 +141,6 @@ sub install_salt_packages {
     zypper_call('in -t package salt-master salt-minion');
 }
 
-#   Function: parse the output from script_output to get the pattern list
-#   Reason  : sometimes script_output with 'zypper pt -u' will cost a lot of time to return,
-#   which cause the console have some system message in the output. we need filt out these
-#   info before we process the result.
-#   parameters:
-#   $cmd   : the command line
-#   $start : the line that start with $start, which is we want
-#   return :  an array of pattern list
-sub get_pattern_list {
-    my ($cmd, $start) = @_;
-
-    my $pkg_name;
-    my @column   = ();
-    my @pkg_list = ();
-    my %seen     = ();
-    my @unique   = ();
-
-    my @pkg_lines = split(/\n/, script_output($cmd, 120));
-
-    foreach my $line (@pkg_lines) {
-        $line =~ s/^\s+|\s+$//g;
-        # In a regular expression, all chars between the \Q and \E are escaped.
-        next if ($line !~ m/^\Q$start\E/);
-        # filter out the spaces in each filed
-        @column = map { s/^\s*|\s*$//gr } split(/\|/, $line);
-        # pkg_name is the 2nd field seperated by '|'
-        $pkg_name = $column[1];
-        push @pkg_list, $pkg_name;
-    }
-
-    if (@pkg_list) {
-        # unique and sort the @pkg_list
-        %seen   = map { $_ => 1 } @pkg_list;
-        @unique = sort keys %seen;
-    }
-
-    return @unique;
-}
-
-# Install extra patterns if var PATTERNS is set
-sub install_patterns {
-    my $pcm = 0;
-    my @pt_list;
-    my @pt_list_un;
-    my @pt_list_in;
-
-    @pt_list_in = get_pattern_list "zypper pt -i", "i";
-    # install all patterns from product.
-    if (check_var('PATTERNS', 'all')) {
-        @pt_list_un = get_pattern_list "zypper pt -u", "|";
-    }
-    # install certain pattern from parameter.
-    else {
-        @pt_list_un = split(/,/, get_var('PATTERNS'));
-    }
-
-    my %installed_pt = ();
-    foreach (@pt_list_in) {
-        $installed_pt{$_} = 1;
-    }
-    @pt_list = sort grep(!$installed_pt{$_}, @pt_list_un);
-    $pcm     = grep /Amazon-Web-Services|Google-Cloud-Platform|Microsoft-Azure/, @pt_list_in;
-
-    for my $pt (@pt_list) {
-        # Cloud patterns are conflict by each other, only install cloud pattern from single vender.
-        if ($pt =~ /Amazon-Web-Services|Google-Cloud-Platform|Microsoft-Azure/) {
-            next unless $pcm == 0;
-            $pt .= '*';
-            $pcm = 1;
-        }
-        # workround for bsc#1034541
-        if (($pt =~ /sap_server/) && is_sle('=11-SP4')) {
-            record_soft_failure 'bsc#1034541';
-            next;
-        }
-        zypper_call "in -t pattern $pt";
-    }
-}
-
 sub sle_register {
     my ($action) = @_;
     # Register sle before update
@@ -254,6 +166,7 @@ sub sle_register {
         }
         else {
             # Erase all local files created from a previous executed registration
+            assert_script_run("sed -i '/^url[[:space:]]*/s|.*|url = https://scc.suse.com/ncc/center/regsvc|' /etc/suseRegister.conf") if (get_var('SLE11_USE_SCC'));
             assert_script_run('suse_register -E');
             # Register SLE 11 to SMT server
             my $smt_url = get_var('SMT_URL', '');
@@ -269,10 +182,11 @@ sub sle_register {
             elsif (get_var('SLE11_USE_SCC')) {
                 my $reg_code = get_required_var('NCC_REGCODE');
                 my $reg_mail = get_var('NCC_MAIL');               # email address is not mandatory for SCC
-                assert_script_run("sed -i '/^url[[:space:]]*/s|.*|url = https://scc.suse.com/ncc/center/regsvc|' /etc/suseRegister.conf");
                 if (get_var('NCC_REGCODE_SDK')) {
                     my $reg_code_sdk = get_required_var('NCC_REGCODE_SDK');
-                    assert_script_run("suse_register -a email=$reg_mail -a regcode-sles=$reg_code -a regcode-sles=$reg_code_sdk", 300);
+                    zypper_call("ar http://schnell.suse.de/SLE11/SLE-11-SP4-SDK-GM/s390x/DVD1/ sdk");
+                    zypper_call("in --auto-agree-with-licenses sle-sdk-release");
+                    assert_script_run("suse_register -a email=$reg_mail -a regcode-sles=$reg_code -a regcode-sdk=$reg_code_sdk", 300);
                 } else {
                     assert_script_run("suse_register -a email=$reg_mail -a regcode-sles=$reg_code", 300);
                 }
@@ -308,4 +222,8 @@ sub test_flags {
     return {milestone => 1, fatal => 1};
 }
 
+sub post_fail_hook {
+    my ($self) = @_;
+    y2_base::save_upload_y2logs;
+}
 1;

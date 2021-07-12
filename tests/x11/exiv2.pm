@@ -7,6 +7,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: exiv2 wget
 # Summary: Add exiv2 tests
 #    Checks exif metadata from given image.
 #    Checks exiv2 functionalities like renaming and creating preview image from metadata.
@@ -33,7 +34,7 @@ sub exiv2_info_test {
         expected_output_exiv2_info_iso       => "ISO speed       : 100",
         expected_output_exiv2_info_metering  => "Metering mode   : Multi-spot",
         expected_output_exiv2_info_copyright => "Copyright       : SUSE Inc",
-        expected_output_exiv2_info_comment   => "Exif comment    : Test caption label",
+        expected_output_exiv2_info_comment   => "Exif comment    : (charset=Ascii )?Test caption label",
     );
 
     # Partial excerpts from the exiv2 -pt output from test image file
@@ -50,7 +51,7 @@ sub exiv2_info_test {
         expected_output_exiv2_ptinfo_max_aperture     => "Exif.Photo.MaxApertureValue                  SRational   1  F1.3",
         expected_output_exiv2_ptinfo_lightsource      => "Exif.Photo.LightSource                       SLong       1  Daylight",
         expected_output_exiv2_ptinfo_focal_length     => "Exif.Photo.FocalLength                       SRational   1  50.0 mm",
-        expected_output_exiv2_ptinfo_user_comment     => "Exif.Photo.UserComment                       Undefined  26  Test caption label",
+        expected_output_exiv2_ptinfo_user_comment     => "Exif.Photo.UserComment                       Undefined  26  (charset=Ascii )?Test caption label",
         expected_output_exiv2_ptinfo_subject_distance => "Exif.Photo.SubjectDistanceRange              SLong       1  Close view",
         expected_output_exiv2_ptinfo_jpeg_format      => "Exif.Thumbnail.JPEGInterchangeFormat         Long        1  818",
     );
@@ -80,7 +81,7 @@ sub run {
 
     #prepare
     become_root;
-    pkcon_quit;
+    quit_packagekit;
     zypper_call "in exiv2";
 
     #Get assets to local directory
@@ -96,6 +97,7 @@ sub run {
     script_run "eog 20190201_154421.jpg", 0;
     assert_screen "exiv2_rename_test";
     send_key 'alt-f4';
+    wait_still_screen(1);
 
     #check exiv2 preview feature, which extracts a image preview from the file.
     assert_script_run "exiv2 -ep1 20190201_154421.jpg";
@@ -103,6 +105,7 @@ sub run {
     script_run "eog 20190201_154421-preview1.jpg", 0;
     assert_screen "exiv2_test_preview";
     send_key 'alt-f4';
+    wait_still_screen(1);
 
     # clean-up
     assert_script_run "rm 20190201_154421.jpg";

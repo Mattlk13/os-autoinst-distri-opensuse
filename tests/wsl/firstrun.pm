@@ -8,31 +8,24 @@
 # without any warranty.
 
 # Summary: Configure WSL users
-# Maintainer: Martin Loviska <mloviska@suse.com>
+# Maintainer: qa-c  <qa-c@suse.de>
 
-use base "windowsbasetest";
-use strict;
-use warnings;
+use Mojo::Base qw(windowsbasetest);
 use testapi;
-use version_utils 'is_sle';
+use version_utils qw(is_sle);
+use wsl qw(is_sut_reg is_fake_scc_url_needed);
 
-sub set_scc_url {
-    my $proxyscc = shift;
-    return unless ($proxyscc);
+sub set_fake_scc_url {
+    my $proxyscc = get_var('SCC_URL');
 
     assert_screen 'yast2-wsl-firstboot-welcome';
     # Exit YaST2 Firstboot
     # Pop up warning should appear
-    wait_screen_change(sub { send_key 'alt-r' }, 5);
-    # Workaround
-    assert_screen [qw(wsl-installing-prompt wsl-firsboot-exit-warning-pop-up)];
-    if (match_has_tag 'wsl-installing-prompt') {
-        record_soft_failure 'bsc#1163347 YaST2 firstboot does not warn the user before abort in welcome';
-    } else {
-        # Cancel pop up and continue
-        wait_screen_change(sub { send_key 'alt-c' }, 5);
-        assert_screen 'yast2-wsl-firstboot-welcome';
-    }
+    send_key 'alt-r';
+    assert_screen 'wsl-firsboot-exit-warning-pop-up';
+    # Confirm to close YaST2 firstboot
+    send_key 'alt-y';
+    assert_screen 'wsl-installing-prompt';
 
     wait_screen_change(sub {
             type_string qq{echo "url: $proxyscc" > /etc/SUSEConnect}, max_interval => 125, wait_screen_change => 2;
@@ -72,19 +65,19 @@ sub license {
     if (is_sle) {
         # license warning
         assert_screen 'wsl-license-not-accepted';
-        wait_screen_change(sub { send_key 'ret' }, 10);
+        send_key 'ret';
         # Accept license
-        wait_screen_change(sub { send_key 'alt-a' }, 10);
+        assert_screen 'wsl-license';
+        send_key 'alt-a';
         assert_screen 'license-accepted';
         send_key 'alt-n';
     }
 }
 
 sub register_via_scc {
-    my $skip = shift;
-    assert_screen 'wsl-registration';
+    assert_screen 'wsl-registration', 120;
 
-    unless (!!$skip) {
+    unless (is_sut_reg) {
         wait_screen_change(sub { send_key 'alt-s' }, 10);
         assert_screen 'wsl-skip-registration-warning';
         send_key 'ret';
@@ -98,7 +91,7 @@ sub register_via_scc {
     wait_screen_change(sub { send_key 'alt-c' }, 10);
     wait_screen_change { type_string $reg_code, max_interval => 125, wait_screen_change => 2 };
     send_key 'alt-n';
-    assert_screen 'wsl-registration-repository-offer';
+    assert_screen 'wsl-registration-repository-offer', 180;
     send_key 'alt-y';
     assert_screen 'wsl-extension-module-selection';
     send_key 'alt-n';
@@ -106,13 +99,12 @@ sub register_via_scc {
 
 sub run {
     # WSL installation is in progress
-    assert_and_click 'install-linux-in-wsl', timeout => 120;
-    assert_screen [qw(yast2-wsl-firstboot-welcome wsl-installing-prompt)], 240;
+    assert_screen [qw(yast2-wsl-firstboot-welcome wsl-installing-prompt)], 420;
 
     if (match_has_tag 'yast2-wsl-firstboot-welcome') {
         assert_and_click 'window-max';
         wait_still_screen stilltime => 3, timeout => 10;
-        set_scc_url(get_var('SCC_URL'));
+        is_fake_scc_url_needed && set_fake_scc_url();
         send_key 'alt-n';
         # License handling
         license;
@@ -121,15 +113,12 @@ sub run {
         enter_user_details([$realname, undef, $password, $password]);
         send_key 'alt-n';
         # Registration
-        is_sle && register_via_scc(get_var('SCC_REGISTER', 0));
+        is_sle && register_via_scc();
         # And done!
-        assert_screen 'wsl-installation-completed', 60;
+        assert_screen 'wsl-installation-completed', 120;
         send_key 'alt-f';
         # Back to CLI
         assert_screen 'wsl-linux-prompt';
-        wait_screen_change { type_string 'exit' };
-        send_key 'ret';
-        save_screenshot;
     } else {
         #1) skip registration, we cannot register against proxy SCC
         assert_and_click 'window-max';
@@ -144,11 +133,36 @@ sub run {
         sleep 2;
         send_key 'ret';
         assert_screen 'wsl-image-ready-prompt', 120;
-        wait_screen_change { type_string 'exit' };
-        send_key 'ret';
-        sleep 2;
-        save_screenshot;
     }
+
+    # Nothing to do in WSL2 pts w/o serialdev support
+    # https://github.com/microsoft/WSL/issues/4322
+    if (get_var('WSL2')) {
+        enter_cmd "exit";
+        return;
+    }
+
+    is_fake_scc_url_needed || become_root;
+    assert_script_run 'cd ~';
+    assert_script_run "zypper ps";
+    enter_cmd 'exit';
+    sleep 3;
+    save_screenshot;
+    is_fake_scc_url_needed || enter_cmd 'exit';
+}
+
+sub post_fail_hook {
+    assert_screen 'yast2-wsl-active';
+    # function keys are not encoded in consoles/VNC.pm
+    send_key 'alt-q';
+    wait_still_screen stilltime => 5, timeout => 35;
+    send_key 'alt-r';
+    assert_screen 'wsl-firsboot-exit-warning-pop-up';
+    send_key 'alt-a';
+    assert_screen 'wsl-installing-prompt';
+    wait_still_screen stilltime => 2, timeout => 11;
+    script_run 'save_y2logs wsl-fb.tar.xz';
+    upload_logs '/root/wsl-fb.tar.xz';
 }
 
 1;

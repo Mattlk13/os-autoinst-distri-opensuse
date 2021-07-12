@@ -23,10 +23,11 @@ sub pre_run_hook {
 
 sub run {
     #run test
-    assert_script_run 'cd /var/opt/systemd-tests';
-    assert_script_run './run-tests.sh TEST-19-DELEGATE --run 2>&1 | tee /tmp/testsuite.log', 120;
+    my $timeout = 600;
+    assert_script_run 'cd /usr/lib/systemd/tests';
+    assert_script_run './run-tests.sh TEST-19-DELEGATE --run 2>&1 | tee /tmp/testsuite.log', $timeout;
     assert_script_run 'grep "PASS: ...TEST-19-DELEGATE" /tmp/testsuite.log';
-    assert_script_run './run-tests.sh TEST-19-DELEGATE --cleanup', 120;
+    assert_script_run './run-tests.sh TEST-19-DELEGATE --clean', 120;
 }
 
 sub test_flags {

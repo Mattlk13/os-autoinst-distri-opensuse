@@ -7,7 +7,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 #
-# Summary: Extracts test commands from an LTP runfile and executes them on the guest.
+# Summary: Executes a single LTP test case
 # Maintainer: Richard Palethorpe <rpalethorpe@suse.com>
 # More documentation is at the bottom
 
@@ -227,7 +227,8 @@ sub record_ltp_result {
         $export_details->{test}->{result} = 'PASS';
     }
     elsif ($results->{conf}) {
-        $details->{result} = 'unk';
+        $details->{result}                = 'skip';
+        $self->{result}                   = 'skip';
         $export_details->{test}->{result} = 'CONF';
     }
     else {
@@ -273,19 +274,36 @@ sub thetime {
     return clock_gettime(CLOCK_MONOTONIC);
 }
 
+sub pre_run_hook {
+    my ($self) = @_;
+    my @pattern_list;
+
+    # Kernel error messages should be treated as soft-fail in boot_ltp,
+    # install_ltp and shutdown_ltp so that at least some testing can be done.
+    # But change them to hard fail in this test module.
+    for my $pattern (@{$self->{serial_failures}}) {
+        my %tmp = %$pattern;
+        $tmp{type} = 'hard' if $tmp{message} =~ m/kernel/i;
+        push @pattern_list, \%tmp;
+    }
+
+    $self->{serial_failures} = \@pattern_list;
+    $self->SUPER::pre_run_hook;
+}
+
 sub run {
     my ($self, $tinfo) = @_;
     die 'Need LTP_COMMAND_FILE to know which tests to run' unless $tinfo && $tinfo->runfile;
-    my $runfile  = $tinfo->runfile;
-    my $timeout  = get_var('LTP_TIMEOUT') || 900;
-    my $is_posix = $runfile =~ m/^\s*openposix\s*$/i;
-    $self->{force_softfail} = 0;
-
-    unless (defined $tinfo) {
-        die 'Require LTP::TestInfo object from loadtest with LTP test case name and command line';
-    }
+    my $runfile            = $tinfo->runfile;
+    my $timeout            = get_var('LTP_TIMEOUT') || 900;
+    my $is_posix           = $runfile =~ m/^\s*openposix\s*$/i;
     my $test_result_export = $tinfo->test_result_export;
     my $test               = $tinfo->test;
+    my %env                = %{$test_result_export->{environment}};
+
+    $env{retval}       = 'undefined';
+    $self->{ltp_env}   = \%env;
+    $self->{ltp_tinfo} = $tinfo;
 
     my $fin_msg    = "### TEST $test->{name} COMPLETE >>> ";
     my $cmd_text   = qq($test->{command}; echo "$fin_msg\$?");
@@ -303,24 +321,17 @@ sub run {
         wait_serial(serial_term_prompt(), undef, 0, no_regex => 1);
         type_string($cmd_text);
         wait_serial($cmd_text, undef, 0, no_regex => 1);
-        type_string("\n");
+        send_key 'ret';
     }
     else {
-        type_string("($cmd_text) | tee /dev/$serialdev\n");
+        enter_cmd("($cmd_text) | tee /dev/$serialdev");
     }
     my $test_log = wait_serial(qr/$fin_msg\d+/, $timeout, 0, record_output => 1);
     my ($timed_out, $result_export) = $self->record_ltp_result($runfile, $test, $test_log, $fin_msg, thetime() - $start_time, $is_posix);
-    my %env = %{$test_result_export->{environment}};
 
     if ($test_log =~ qr/$fin_msg(\d+)$/) {
         $env{retval} = $1;
     }
-    else {
-        $env{retval} = 'undefined';
-    }
-
-    $env{backend} = get_var('BACKEND');
-    $self->{force_softfail} = override_known_failures($self, \%env, $runfile, $test->{name}) if get_var('LTP_KNOWN_ISSUES') and $self->{result} eq 'fail';
 
     push(@{$test_result_export->{results}}, $result_export);
     if ($timed_out) {
@@ -343,8 +354,8 @@ sub run_post_fail {
 
     $self->fail_if_running();
 
-    if ($self->{force_softfail}) {
-        $self->{result} = 'softfail';
+    if ($self->{ltp_tinfo} and get_var('LTP_KNOWN_ISSUES') and $self->{result} eq 'fail') {
+        override_known_failures($self, $self->{ltp_env}, $self->{ltp_tinfo}->runfile, $self->{ltp_tinfo}->test->{name});
     }
 
     if ($msg =~ qr/died/) {
@@ -356,9 +367,8 @@ sub run_post_fail {
 
 =head1 Discussion
 
-This module extracts an LTP runtest file from the VM[1], parses it and then
-executes the LTP test cases defined on each line of the runtest file. Logs are
-uploaded and interpreted after each LTP test case completes.
+This module executes a single LTP test case specified by LTP::TestInfo which
+is passed to run. This module is dynamically scheduled by boot_ltp at runtime.
 
 LTP test cases are usually a binary executable or a shell script. Each line of
 the runtest file contains the name of the test case and a string which is
@@ -367,10 +377,6 @@ executed by the shell.
 The output of each test case is parsed for lines containing CONF and FAIL.
 If these terms are found in the output then a neutral or fail result will be
 reported, otherwise a pass.
-
-[1] Actually the parsing is now done by lib/main_ltp.pm which is called from
-    main.pm after install_ltp has uploaded the runtest files as
-    assets. run_ltp is scheduled once for each LTP test case/executable.
 
 [2] This overrides the default basetest class behaviour because the LTP tests
     are able to continue after most failures (without reverting to a
@@ -423,12 +429,6 @@ LTP test itself.
 
 Comma separated list of environment variables to be set for tests.
 E.g.: key=value,key2="value with spaces",key3='another value with spaces'
-
-=head2 LTP_RUNTEST_TAG
-
-The runtest asset files are appended with git or pkg depending on how LTP was
-installed. By default the runtest files from the git installation will be
-used, but setting this variable to pkg allows that behavior to be overridden.
 
 =cut
 

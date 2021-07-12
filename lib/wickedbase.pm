@@ -20,6 +20,7 @@ use testapi qw(is_serial_terminal :DEFAULT);
 use serial_terminal;
 use Carp;
 use Mojo::File 'path';
+use Regexp::Common 'net';
 
 use strict;
 use warnings;
@@ -39,8 +40,8 @@ This function saves the command and the stdout and stderr to a file to be upload
 =cut
 sub wicked_command {
     my ($self, $action, $iface) = @_;
-    my $cmd = '/usr/sbin/wicked --log-target syslog ' . $action . ' ' . $iface;
-    assert_script_run(q(echo -e "\n# ") . $cmd . ' >> /tmp/wicked_serial.log');
+    my $cmd = '/usr/sbin/wicked --log-target syslog --debug all ' . $action . ' ' . $iface;
+    assert_script_run('echo -e "\n# $(date -Isecond)\n# "' . $cmd . ' >> /tmp/wicked_serial.log');
     record_info('wicked cmd', $cmd);
     assert_script_run($cmd . ' 2>&1 | tee -a /tmp/wicked_serial.log');
     assert_script_run(q(echo -e "\n# ip addr" >> /tmp/wicked_serial.log));
@@ -129,23 +130,26 @@ sub get_ip {
     my $ips_hash =
       {
         #                       SUT                       REF
-        host         => ['10.0.2.11/15',             '10.0.2.10/15'],
-        host6        => ['fd00:deca:fbad:50::11/64', 'fd00:deca:fbad:50::10/64'],
-        gre1         => ['192.168.1.2',              '192.168.1.1'],
-        sit1         => ['2001:0db8:1234::000f',     '2001:0db8:1234::000e'],
-        tunl1        => ['3.3.3.11',                 '3.3.3.10'],
-        tun1         => ['192.168.2.11',             '192.168.2.10'],
-        tap1         => ['192.168.2.11',             '192.168.2.10'],
-        br0          => ['10.0.2.11',                '10.0.2.10'],
-        vlan         => ['192.0.2.11/24',            '192.0.2.10/24'],
-        vlan_changed => ['192.0.2.111/24',           '192.0.2.110/24'],
-        macvtap      => ['10.0.2.18/15',             '10.0.2.17/15'],
-        bond         => ['10.0.2.18',                '10.0.2.17'],
-        dhcp_2nic    => ['10.20.30.',                '10.20.30.12'],                # dhcp_2nic in SUT, we don't know the last octect
-        second_card  => ['10.0.3.11',                '10.0.3.12'],
-        gateway      => ['10.0.2.2',                 '10.0.2.2'],
-        ipv6         => ['fd00:dead:beef::',         'fd00:dead:beef::'],
-        dns_advice   => ['fc00:a79:817:1::1',        'fc00:a79:817:1::1'],
+        host         => ['10.0.2.11/15',              '10.0.2.10/15'],
+        host6        => ['fd00:deca:fbad:50::11/64',  'fd00:deca:fbad:50::10/64'],
+        gre1         => ['192.168.1.2',               '192.168.1.1'],
+        sit1         => ['2001:0db8:1234::000f',      '2001:0db8:1234::000e'],
+        tunl1        => ['3.3.3.11',                  '3.3.3.10'],
+        tun1         => ['192.168.2.11',              '192.168.2.10'],
+        tap1         => ['192.168.2.11',              '192.168.2.10'],
+        br0          => ['10.0.2.11',                 '10.0.2.10'],
+        vlan         => ['192.0.2.11/24',             '192.0.2.10/24'],
+        vlan_changed => ['192.0.2.111/24',            '192.0.2.110/24'],
+        macvtap      => ['10.0.2.18/15',              '10.0.2.17/15'],
+        bond         => ['10.0.2.18',                 '10.0.2.17'],
+        dhcp_2nic    => ['10.20.30.',                 '10.20.30.12'],                 # dhcp_2nic in SUT, we don't know the last octect
+        second_card  => ['10.0.3.11',                 '10.0.3.12'],
+        gateway      => ['10.0.2.2',                  '10.0.2.2'],
+        wlan         => ['10.6.6.2',                  '10.6.6.1'],
+        wlan_dhcp    => ['10.6.6.10',                 '10.6.6.1'],
+        ipv6         => ['fd00:dead:beef:',           'fd00:dead:beef:'],
+        dhcp6        => ['fd00:dead:beef:6021:d::11', 'fd00:dead:beef:6021:d::10'],
+        dns_advice   => ['fd00:dead:beef:6021::42',   'fd00:dead:beef:6021::42'],
       };
     my $ip = $ips_hash->{$args{type}}->[$args{is_wicked_ref}];
     die "$args{type} not exists" unless $ip;
@@ -449,7 +453,7 @@ sub prepare_check_macvtap {
 
 sub validate_macvtap {
     my ($self, $macvtap_log) = @_;
-    my $ref_ip     = $self->get_ip(type => 'host',    netmask => 0, is_wicked_ref => 1);
+    my $ref_ip     = $self->get_ip(type => 'host', netmask => 0, is_wicked_ref => 1);
     my $ip_address = $self->get_ip(type => 'macvtap', netmask => 0);
     script_run("./check_macvtap $ref_ip $ip_address > $macvtap_log 2>&1 & export CHECK_MACVTAP_PID=\$!");
     sleep(30);    # OVS on a worker is slow sometimes to change and we haven't found better way how to handle it
@@ -542,25 +546,136 @@ sub check_fail_over {
     die('Active Link is the same after interface cut');
 }
 
-sub wait_for_dhcpd {
-    my ($self) = @_;
-    my $timeout = 60;
-    while ($timeout > 0) {
-        if (!systemctl('is-active dhcpd.service', ignore_failure => 1)) {
-            record_info('DHCP', 'dhcp active');
-            return 1;
+=head2 sync_start_of
+
+  sync_start_of($service, $mutex, [,$timeout])
+
+Start C<$service> within defined $timeout ( default is 60).
+After succesfully service start will create mutex with C<$mutex>
+which can be used by parallel test to catch this event
+
+=cut
+sub sync_start_of {
+    my ($self, $service, $mutex, $tries) = @_;
+    $tries //= 12;
+    if (script_run("systemctl start $service.service") == 0) {
+        while ($tries > 0) {
+            if (script_run("systemctl is-active $service.service") == 0) {
+                record_info($service, $service . ' is active');
+                die("Create mutex failed") unless mutex_create($mutex);
+                return 0;
+            }
+            $tries -= 1;
+            sleep 5;
         }
-        $timeout -= 1;
-        sleep 1;
     }
-    systemctl('status dhcpd.service');
-    die('DHCP not comming up');
+    # if we get here means that service failed to start
+    script_run("journalctl -u $service -o short-precise");
+    # we creating this mutex anyway even so we know that we fail to start service
+    # to not cause dead-lock
+    die("Create mutex failed") unless mutex_create($mutex);
+    die("Failed to start $service");
 }
 
 sub ifbind {
     my ($self, $action, $interface) = @_;
     my $cmd = 'bash ' . WICKED_DATA_DIR . "/wicked/ifbind.sh $action $interface";
     record_info('ifbind', $cmd . "\n" . script_output($cmd));
+}
+
+sub check_ipv6 {
+    my ($self, $ctx) = @_;
+    my $gateway             = $self->get_ip(type => 'gateway');
+    my $ipv6_network_prefix = $self->get_ip(type => 'ipv6');
+    my $ipv6_dns            = $self->get_ip(type => 'dns_advice');
+    $self->get_from_data('wicked/ifcfg/ipv6', '/etc/sysconfig/network/ifcfg-' . $ctx->iface());
+    $self->wicked_command('ifup', $ctx->iface());
+    assert_script_run('rdisc6 ' . $ctx->iface());
+    $self->wicked_command('ifdown', $ctx->iface());
+    $self->wicked_command('ifup',   $ctx->iface());
+    my $errors = 0;
+    my $tries  = 12;
+    my $no_ip  = 1;
+    my $output = '';
+    while ($tries > 0 && $no_ip) {
+        $no_ip  = 0;
+        $output = script_output('ip a s dev ' . $ctx->iface());
+        unless ($output =~ /inet $RE{net}{IPv4}/) {
+            record_info('Waiting for IPv4');
+            $no_ip = 1;
+        }
+        unless ($output =~ /inet6 $RE{net}{IPv6}/) {
+            record_info('Waiting for IPv6');
+            $no_ip = 1;
+        }
+        $tries -= 1;
+        sleep(5);
+    }
+    $errors = $no_ip;
+
+    unless ($output !~ /tentative/) {
+        record_info('FAIL', 'tentative word presented', result => 'fail');
+        $errors = 1;
+    }
+    unless ($output =~ /inet6 $ipv6_network_prefix/m) {
+        record_info('FAIL', 'no prefix for local network route', result => 'fail');
+        $errors = 1;
+    }
+
+    $output = script_output('ip -6 r s');
+
+    unless ($output =~ /^default/m) {
+        record_info('FAIL', 'no default route presented', result => 'fail');
+        $errors = 1;
+    }
+
+    $output = script_output('ip -6 -o r s');
+
+    unless ($output =~ /^default.*proto ra/m) {
+        record_info('FAIL', 'IPv6 default route comes not from RA', result => 'fail');
+        $errors = 1;
+    }
+
+    $tries = 12;
+    my $dns_failure = 1;
+    while ($tries > 0 && $dns_failure) {
+        $dns_failure = 0;
+        $output      = script_output('cat /etc/resolv.conf');
+
+        unless ($output =~ /^nameserver $gateway/m) {
+            record_info('IPv4 DNS', 'IPv4 DNS is missing in resolv.conf');
+            $dns_failure = 1;
+        }
+
+        unless ($output =~ /^nameserver $ipv6_dns/m) {
+            record_info('IPv6 DNS', 'IPv6 DNS is missing in resolv.conf');
+            $dns_failure = 1;
+        }
+        $tries -= 1;
+        sleep(5);
+    }
+
+    die "There were errors during test" if $errors || $dns_failure;
+}
+
+sub run_test_shell_script
+{
+    my ($self, $title, $script_cmd) = @_;
+    my $output = script_output($script_cmd . ' && echo "==COLLECT_EXIT_CODE==$?=="', proceed_on_failure => 1);
+    my $result = $output =~ m/==COLLECT_EXIT_CODE==0==/ ? 'ok' : 'fail';
+    $self->record_console_test_result($title, $output, result => $result);
+}
+
+sub record_console_test_result {
+    my ($self, $title, $content, %args) = @_;
+    $args{result} //= 'failed';
+    $title =~ s/:/_/g;
+    my $details  = $self->record_testresult($args{result});
+    my $filename = $self->next_resultname('txt', $title);
+    $details->{_source} = 'parser';
+    $details->{text}    = $filename;
+    $details->{title}   = $title;
+    $self->write_resultfile($filename, $content);
 }
 
 sub post_run {
@@ -587,7 +702,7 @@ sub pre_run_hook {
     wait_serial(serial_term_prompt(), undef, 0, no_regex => 1);
     type_string($coninfo);
     wait_serial($coninfo, undef, 0, no_regex => 1);
-    type_string("\n");
+    send_key 'ret';
     if ($self->{name} eq 'before_test' && get_var('VIRTIO_CONSOLE_NUM', 1) > 1) {
         my $serial_terminal = check_var('ARCH', 'ppc64le') ? 'hvc2' : 'hvc1';
         add_serial_console($serial_terminal);
@@ -597,6 +712,7 @@ sub pre_run_hook {
         set_var('WICKED_TCPDUMP_PID', script_output('echo $CHECK_TCPDUMP_PID'));
     }
     $self->upload_wicked_logs('pre');
+    $self->SUPER::pre_run_hook;
     $self->do_barrier('pre_run');
 }
 

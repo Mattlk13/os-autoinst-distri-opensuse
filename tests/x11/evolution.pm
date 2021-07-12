@@ -8,11 +8,12 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: evolution
 # Summary: Startup of evolution with check of first-startup dialogs
 # - Start evolution and check if it is running
 # - Handle evolution first time wizard
 # - Close evolution
-# Maintainer: Oliver Kurz <okurz@suse.de>
+# Maintainer: QE Core <qe-core@suse.de>
 
 use base "x11test";
 use strict;

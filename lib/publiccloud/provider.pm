@@ -12,15 +12,15 @@
 # Maintainer: Clemens Famulla-Conrad <cfamullaconrad@suse.de>
 
 package publiccloud::provider;
-use testapi;
+use testapi qw(is_serial_terminal :DEFAULT);
 use Mojo::Base -base;
 use publiccloud::instance;
 use Data::Dumper;
 use Mojo::JSON 'decode_json';
-use utils 'file_content_replace';
+use utils qw(file_content_replace script_retry);
 
 use constant TERRAFORM_DIR     => '/root/terraform';
-use constant TERRAFORM_TIMEOUT => 17 * 60;
+use constant TERRAFORM_TIMEOUT => 30 * 60;
 
 has key_id            => undef;
 has key_secret        => undef;
@@ -47,10 +47,8 @@ sub init {
         my $cloud_name = $self->conv_openqa_tf_name;
         assert_script_run('cd ' . TERRAFORM_DIR);
         assert_script_run('git clone --depth 1 --branch ' . get_var('HA_SAP_GIT_TAG', 'master') . ' ' . get_required_var('HA_SAP_GIT_REPO') . ' .');
-        assert_script_run('cp pillar_examples/automatic/{cluster.sls,hana.sls,top.sls} salt/hana_node/files/pillar/');
         assert_script_run('cd');    # We need to ensure to be in the home directory
         assert_script_run('curl ' . data_url("publiccloud/terraform/sap/$file.tfvars") . ' -o ' . TERRAFORM_DIR . "/$cloud_name/terraform.tfvars");
-        $self->create_ssh_key(ssh_private_key_file => TERRAFORM_DIR . '/salt/hana_node/files/sshkeys/cluster.id_rsa');
     }
     else {
         assert_script_run('curl ' . data_url("publiccloud/terraform/$file.tf") . ' -o ' . TERRAFORM_DIR . '/plan.tf');
@@ -169,7 +167,7 @@ sub create_ssh_key {
     $args{ssh_private_key_file} //= '/root/.ssh/id_rsa';
     if (script_run('test -f ' . $args{ssh_private_key_file}) != 0) {
         assert_script_run('SSH_DIR=`dirname ' . $args{ssh_private_key_file} . '`; mkdir -p $SSH_DIR');
-        assert_script_run('ssh-keygen -b 2048 -t rsa -q -N "" -f ' . $args{ssh_private_key_file});
+        assert_script_run('ssh-keygen -b 2048 -t rsa -q -N "" -m pem -f ' . $args{ssh_private_key_file});
     }
 }
 
@@ -183,7 +181,7 @@ sub run_img_proof {
     die('Must provide an instance object') if (!$args{instance});
 
     $args{tests}       //= '';
-    $args{timeout}     //= 60 * 30;
+    $args{timeout}     //= 60 * 120;
     $args{results_dir} //= 'img_proof_results';
     $args{distro}      //= 'sles';
     $args{tests} =~ s/,/ /g;
@@ -199,12 +197,12 @@ sub run_img_proof {
     $cmd .= '--no-cleanup ';
     $cmd .= '--collect-vm-info ';
     $cmd .= '--service-account-file "' . $args{credentials_file} . '" ' if ($args{credentials_file});
-    $cmd .= "--access-key-id '" . $args{key_id} . "' " if ($args{key_id});
-    $cmd .= "--secret-access-key '" . $args{key_secret} . "' " if ($args{key_secret});
-    $cmd .= "--ssh-key-name '" . $args{key_name} . "' " if ($args{key_name});
-    $cmd .= '-u ' . $args{user} . ' ' if ($args{user});
+    $cmd .= "--access-key-id '" . $args{key_id} . "' "                  if ($args{key_id});
+    $cmd .= "--secret-access-key '" . $args{key_secret} . "' "          if ($args{key_secret});
+    $cmd .= "--ssh-key-name '" . $args{key_name} . "' "                 if ($args{key_name});
+    $cmd .= '-u ' . $args{user} . ' '                                   if ($args{user});
     $cmd .= '--ssh-private-key-file "' . $args{instance}->ssh_key . '" ';
-    $cmd .= '--running-instance-id "' . $args{instance}->instance_id . '" ';
+    $cmd .= '--running-instance-id "' . ($args{running_instance_id} // $args{instance}->instance_id) . '" ';
 
     $cmd .= $args{tests};
     record_info("img-proof cmd", $cmd);
@@ -229,9 +227,12 @@ sub run_img_proof {
 Retrieves the CSP image id if exists, otherwise exception is thrown.
 The given C<$img_url> is optional, if not present it retrieves from
 PUBLIC_CLOUD_IMAGE_LOCATION.
+If PUBLIC_CLOUD_IMAGE_ID is set, then this value will be used
 =cut
 sub get_image_id {
     my ($self, $img_url) = @_;
+    my $predefined_id = get_var('PUBLIC_CLOUD_IMAGE_ID');
+    return $predefined_id if ($predefined_id);
     $img_url //= get_required_var('PUBLIC_CLOUD_IMAGE_LOCATION');
     my ($img_name) = $img_url =~ /([^\/]+)$/;
     $self->{image_cache} //= {};
@@ -273,7 +274,7 @@ sub create_instances {
     my @vms = $self->terraform_apply(%args);
     foreach my $instance (@vms) {
         record_info("INSTANCE $instance->{instance_id}", Dumper($instance));
-        $instance->check_ssh_port() if ($args{check_connectivity});
+        $instance->wait_for_ssh() if ($args{check_connectivity});
     }
     return @vms;
 }
@@ -314,6 +315,7 @@ sub terraform_apply {
     my @instances;
     my $create_extra_disk = 'false';
     my $extra_disk_size   = 0;
+    my $terraform_timeout = get_var('TERRAFORM_TIMEOUT', TERRAFORM_TIMEOUT);
 
     $args{count} //= '1';
     my $instance_type        = get_var('PUBLIC_CLOUD_INSTANCE_TYPE');
@@ -327,35 +329,47 @@ sub terraform_apply {
     record_info('INFO', "Creating instance $instance_type from $image ...");
     if (get_var('PUBLIC_CLOUD_SLES4SAP')) {
         assert_script_run('cd ' . TERRAFORM_DIR . "/$cloud_name");
-        my $sap_media   = get_required_var('HANA');
-        my $sap_regcode = get_required_var('SCC_REGCODE_SLES4SAP');
-        my $sle_version = get_var('FORCED_DEPLOY_REPO_VERSION') ? get_var('FORCED_DEPLOY_REPO_VERSION') : get_var('VERSION');
+        my $sap_media            = get_required_var('HANA');
+        my $sap_regcode          = get_required_var('SCC_REGCODE_SLES4SAP');
+        my $storage_account_name = get_var('STORAGE_ACCOUNT_NAME');
+        my $storage_account_key  = get_var('STORAGE_ACCOUNT_KEY');
+        my $sle_version          = get_var('FORCED_DEPLOY_REPO_VERSION') ? get_var('FORCED_DEPLOY_REPO_VERSION') : get_var('VERSION');
         $sle_version =~ s/-/_/g;
+        my $ha_sap_repo = get_var('HA_SAP_REPO') ? get_var('HA_SAP_REPO') . '/SLE_' . $sle_version : '';
         file_content_replace('terraform.tfvars',
             q(%MACHINE_TYPE%)         => $instance_type,
             q(%REGION%)               => $self->region,
             q(%HANA_BUCKET%)          => $sap_media,
             q(%SLE_IMAGE%)            => $image,
             q(%SCC_REGCODE_SLES4SAP%) => $sap_regcode,
+            q(%STORAGE_ACCOUNT_NAME%) => $storage_account_name,
+            q(%STORAGE_ACCOUNT_KEY%)  => $storage_account_key,
+            q(%HA_SAP_REPO%)          => $ha_sap_repo,
             q(%SLE_VERSION%)          => $sle_version
         );
         upload_logs(TERRAFORM_DIR . "/$cloud_name/terraform.tfvars", failok => 1);
-        assert_script_run('terraform workspace new qashapopenqa -no-color', TERRAFORM_TIMEOUT);
+        assert_script_run('terraform workspace new qashapopenqa -no-color', $terraform_timeout);
     }
     else {
         assert_script_run('cd ' . TERRAFORM_DIR);
     }
-    assert_script_run('terraform init -no-color', TERRAFORM_TIMEOUT);
+    script_retry('terraform init -no-color', timeout => $terraform_timeout, delay => 3, retry => 6);
 
     my $cmd = 'terraform plan -no-color ';
     if (!get_var('PUBLIC_CLOUD_SLES4SAP')) {
-        $cmd .= "-var 'image_id=" . $image . "' ";
+        # Some auxiliary variables, requires for fine control and public cloud provider specifics
+        for my $key (keys %{$args{vars}}) {
+            my $value = $args{vars}->{$key};
+            $value =~ s/'/'"'"'/;    # ensure values are escaped properly
+            $cmd .= sprintf(q(-var '%s=%s' ), $key, $value);
+        }
+        $cmd .= "-var 'image_id=" . $image . "' " if ($image);
         $cmd .= "-var 'instance_count=" . $args{count} . "' ";
         $cmd .= "-var 'type=" . $instance_type . "' ";
         $cmd .= "-var 'region=" . $self->region . "' ";
         $cmd .= "-var 'name=" . $name . "' ";
         $cmd .= "-var 'project=" . $args{project} . "' " if $args{project};
-        $cmd .= sprintf(q(-var 'tags={"openqa_ttl":"%d"}' ), get_var('MAX_JOB_TIME', 7200) + 300);
+        $cmd .= sprintf(q(-var 'tags={"openqa_ttl":"%d"}' ), get_var('MAX_JOB_TIME', 7200) + get_var('PUBLIC_CLOUD_TTL_OFFSET', 300));
         if ($args{use_extra_disk}) {
             $cmd .= "-var 'create-extra-disk=true' ";
             $cmd .= "-var 'extra-disk-size=" . $args{use_extra_disk}->{size} . "' " if $args{use_extra_disk}->{size};
@@ -369,10 +383,15 @@ sub terraform_apply {
     $cmd .= "-out myplan";
     record_info('TFM cmd', $cmd);
 
-    assert_script_run($cmd, TERRAFORM_TIMEOUT);
-    my $ret = script_run('terraform apply -no-color -input=false myplan', TERRAFORM_TIMEOUT);
+    script_retry($cmd, timeout => $terraform_timeout, delay => 3, retry => 6);
+    my $ret = script_run('terraform apply -no-color -input=false myplan', $terraform_timeout);
     unless (defined $ret) {
-        type_string(qq(\c\\));        # Send QUIT signal
+        if (is_serial_terminal()) {
+            type_string(qq(\c\\));    # Send QUIT signal
+        }
+        else {
+            send_key('ctrl-\\');      # Send QUIT signal
+        }
         assert_script_run('true');    # make sure we have a prompt
         record_info('ERROR', 'Terraform apply failed with timeout', result => 'fail');
         assert_script_run('cd ' . TERRAFORM_DIR);
@@ -387,12 +406,8 @@ sub terraform_apply {
     my $vms;
     my $ips;
     if (get_var('PUBLIC_CLOUD_SLES4SAP')) {
-        $vms = $output->{cluster_nodes_name}->{value};
-        $ips = $output->{cluster_nodes_public_ip}->{value};
-        my $iscsi_vms = $output->{iscsisrv_name}->{value};
-        my $iscsi_ips = $output->{iscsisrv_public_ip}->{value};
-        push @{$vms}, @{$iscsi_vms};
-        push @{$ips}, @{$iscsi_ips};
+        $vms = $output->{openqa_vms}->{value};
+        $ips = $output->{openqa_ips}->{value};
     }
     else {
         $vms = $output->{vm_name}->{value};
@@ -432,24 +447,29 @@ sub terraform_destroy {
     else {
         assert_script_run('cd ' . TERRAFORM_DIR);
     }
-    my $ret = script_run('terraform destroy -no-color -auto-approve', TERRAFORM_TIMEOUT);
+    my $ret = script_run('terraform destroy -no-color -auto-approve', get_var('TERRAFORM_TIMEOUT', TERRAFORM_TIMEOUT));
     unless (defined $ret) {
-        type_string(qq(\c\\));        # Send QUIT signal
+        if (is_serial_terminal()) {
+            type_string(qq(\c\\));    # Send QUIT signal
+        }
+        else {
+            send_key('ctrl-\\');      # Send QUIT signal
+        }
         assert_script_run('true');    # make sure we have a prompt
         record_info('ERROR', 'Terraform destroy failed with timeout', result => 'fail');
         assert_script_run('cd ' . TERRAFORM_DIR);
         $self->on_terraform_destroy_timeout();
     }
-    record_info('ERROR', 'Terraform exited with' . $ret, result => 'fail') if ($ret != 0);
+    record_info('ERROR', 'Terraform exited with ' . $ret, result => 'fail') if ($ret != 0);
 }
 
-=head2 vault_login
+=head2 __vault_login
 
 Login to vault using C<_SECRET_PUBLIC_CLOUD_REST_USER> and
 C<_SECRET_PUBLIC_CLOUD_REST_PW>. The retrieved VAULT_TOKEN is stored in this
 instance and used for further C<publiccloud::provider::vault_api()> calls.
 =cut
-sub vault_login
+sub __vault_login
 {
     my ($self)   = @_;
     my $url      = get_required_var('_SECRET_PUBLIC_CLOUD_REST_URL');
@@ -461,25 +481,40 @@ sub vault_login
     $url = $url . '/v1/auth/userpass/login/' . $user;
     my $res = $ua->post($url => json => {password => $password})->result;
     if (!$res->is_success) {
-        bmwqemu::diag('Request ' . $url . ' failed with: ' . $res->message . '(' . $res->code . ')');
-        if ($res->code == 400) {
-            for my $e (@{$res->json->{errors}}) {
-                bmwqemu::diag($e);
-            }
-        }
+        my $err_msg = 'Request ' . $url . ' failed with: ' . $res->message . ' (' . $res->code . ')';
+        $err_msg .= "\n" . join("\n", @{$res->json->{errors}}) if ($res->code == 400);
+        record_info('Vault login', $err_msg, result => 'fail');
         die("Vault login failed - $url");
     }
 
     return $self->vault_token($res->json('/auth/client_token'));
 }
 
-=head2 vault_api
+=head2 vault_login
+
+Wrapper arround C<<$self->vault_login()>> to have retry capability.
+=cut
+sub vault_login {
+    my $self  = shift;
+    my $tries = 3;
+    my $ret;
+    while ($tries-- > 0) {
+        eval {
+            $ret = $self->__vault_login();
+        };
+        return $ret unless $@;
+        sleep 10;
+    }
+    die("Maximum number of Vault request retries exceeded. Check Vault Server is up and running");
+}
+
+=head2 __vault_api
 
 Invoke a vault API call. It use _SECRET_PUBLIC_CLOUD_REST_URL as base
 url.
 Depending on the method (get|post) you can pass additional data as json.
 =cut
-sub vault_api {
+sub __vault_api {
     my ($self, $path, %args) = @_;
     my $method = $args{method} // 'get';
     my $data   = $args{data}   // {};
@@ -490,6 +525,7 @@ sub vault_api {
     $self->vault_login() unless ($self->vault_token);
 
     $ua->insecure(get_var('_SECRET_PUBLIC_CLOUD_REST_SSL_INSECURE', 0));
+    $ua->request_timeout(40);
     $url = $url . $path;
     bmwqemu::diag("Request Vault REST API: $url");
     if ($method eq 'get') {
@@ -498,22 +534,38 @@ sub vault_api {
     } elsif ($method eq 'post') {
         $res = $ua->post($url =>
               {'X-Vault-Token' => $self->vault_token()} =>
-              json => $data)->result;
+              json                                      => $data)->result;
     } else {
         die("Unknown method $method");
     }
 
     if (!$res->is_success) {
-        bmwqemu::diag('Request ' . $url . ' failed with: ' . $res->message . '(' . $res->code . ')');
-        if ($res->code == 400) {
-            for my $e (@{$res->json->{errors}}) {
-                bmwqemu::diag($e);
-            }
-        }
+        my $err_msg = 'Request ' . $url . ' failed with: ' . $res->message . ' (' . $res->code . ')';
+        $err_msg .= "\n" . join("\n", @{$res->json->{errors}}) if ($res->code == 400);
+        record_info('Vault API', $err_msg, result => 'fail');
         die("Vault REST api call failed - $url");
     }
 
     return $res->json;
+}
+
+=head2 vault_api
+
+Wrapper around C<<$self->vault_api()>> to get retry capability.
+=cut
+sub vault_api {
+    my ($self, $path, %args) = @_;
+    my $ret;
+    my $tries = 3;
+
+    while ($tries-- > 0) {
+        eval {
+            $ret = $self->__vault_api($path, %args);
+        };
+        return $ret unless ($@);
+        sleep 10;
+    }
+    die("Maximum number of Vault request retries exceeded. Check Vault Server is up and running");
 }
 
 =head2 vault_get_secrets
@@ -556,6 +608,7 @@ sub cleanup {
     my ($self) = @_;
     $self->terraform_destroy();
     $self->vault_revoke();
+    assert_script_run "cd";
 }
 
 =head2 stop_instance
@@ -576,6 +629,16 @@ This function implements a provider specifc start call for a given instance.
 sub start_instance
 {
     die('start_instance() isn\'t implemented');
+}
+
+=head2 get_state_from_instance
+
+This function implements a provider specifc get_state call for a given instance.
+
+=cut
+sub get_state_from_instance
+{
+    die('get_state_from_instance() isn\'t implemented');
 }
 
 1;

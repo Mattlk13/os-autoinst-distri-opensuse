@@ -16,39 +16,27 @@ use strict;
 use warnings;
 use File::Basename;
 use testapi;
-use Utils::Backends qw(use_ssh_serial_console is_remote_backend);
+use Utils::Backends qw(use_ssh_serial_console is_remote_backend set_ssh_console_timeout);
 use ipmi_backend_utils;
-
+use virt_autotest::utils qw(is_xen_host);
 use IPC::Run;
-sub ipmitool {
-    my ($cmd) = @_;
 
-    my @cmd = ('ipmitool', '-I', 'lanplus', '-H', $bmwqemu::vars{IPMI_HOSTNAME}, '-U', $bmwqemu::vars{IPMI_USER}, '-P', $bmwqemu::vars{IPMI_PASSWORD});
-    push(@cmd, split(/ /, $cmd));
-
-    my ($stdin, $stdout, $stderr, $ret);
-    $ret = IPC::Run::run(\@cmd, \$stdin, \$stdout, \$stderr);
-    chomp $stdout;
-    chomp $stderr;
-
-    bmwqemu::diag("IPMI: $stdout");
-    return $stdout;
+sub set_ssh_console_timeout_before_use {
+    reset_consoles;
+    select_console('root-console');
+    set_ssh_console_timeout('/etc/ssh/sshd_config', '28800');
+    reset_consoles;
+    select_console 'sol', await_console => 1;
+    send_key 'ret';
+    check_screen([qw(linux-login virttest-displaymanager)], 60);
+    save_screenshot;
+    send_key 'ret';
 }
 
 sub login_to_console {
     my ($self, $timeout, $counter) = @_;
     $timeout //= 5;
     $counter //= 240;
-
-    if (check_var('PERF_KERNEL', '1') or check_var('CPU_BUGS', '1') or check_var('VT_PERF', '1')) {
-        reset_consoles;
-        select_console 'sol', await_console => 0;
-        send_key_until_needlematch(['linux-login', 'virttest-displaymanager'], 'ret', $counter, $timeout);
-        #use console based on ssh to avoid unstable ipmi
-        save_screenshot;
-        use_ssh_serial_console;
-        return;
-    }
 
     if (check_var('ARCH', 's390x')) {
         #Switch to s390x lpar console
@@ -58,27 +46,48 @@ sub login_to_console {
     }
 
     reset_consoles;
-    select_console 'sol', await_console => 0;
+    reset_consoles;
+    if (is_remote_backend && check_var('ARCH', 'aarch64') && get_var('IPMI_HW') eq 'thunderx') {
+        select_console 'sol', await_console => 1;
+        send_key 'ret';
+        ipmi_backend_utils::ipmitool 'chassis power reset';
+    }
+    else {
+        select_console 'sol', await_console => 0;
+    }
 
-    my $sut_machine = get_var('SUT_IP', 'nosutip');
-    boot_local_disk_arm_huawei if (is_remote_backend && check_var('ARCH', 'aarch64') && ($sut_machine =~ /huawei/img));
+    if (check_var('PERF_KERNEL', '1') or check_var('CPU_BUGS', '1') or check_var('VT_PERF', '1')) {
+        if (get_var("XEN") && check_var('CPU_BUGS', '1')) {
+            assert_screen 'pxe-qa-net-mitigation', 90;
+            send_key 'ret';
+            assert_screen([qw(grub2 grub1)], 60);
+            send_key 'up';
+        }
+        else {
+            send_key_until_needlematch(['linux-login', 'virttest-displaymanager'], 'ret', $counter, $timeout);
+            #use console based on ssh to avoid unstable ipmi
+            save_screenshot;
+            use_ssh_serial_console;
+            return;
+        }
+    }
 
     if (!check_screen([qw(grub2 grub1 prague-pxe-menu)], 210)) {
         ipmitool("chassis power reset");
         reset_consoles;
         select_console 'sol', await_console => 0;
-        assert_screen([qw(grub2 grub1 prague-pxe-menu)], 90);
+        check_screen([qw(grub2 grub1 prague-pxe-menu)], 90);
     }
 
     # If a PXE menu will appear just select the default option (and save us the time)
     if (match_has_tag('prague-pxe-menu')) {
         send_key 'ret';
 
-        assert_screen([qw(grub2 grub1)], 60);
+        check_screen([qw(grub2 grub1)], 60);
     }
 
     if (!get_var("reboot_for_upgrade_step")) {
-        if (get_var("XEN") || check_var("HOST_HYPERVISOR", "xen")) {
+        if (is_xen_host) {
             #send key 'up' to stop grub timer counting down, to be more robust to select xen
             send_key 'up';
             save_screenshot;
@@ -108,7 +117,7 @@ sub login_to_console {
             use_ssh_serial_console;
             save_screenshot;
             #start upgrade
-            type_string("DISPLAY= yast.ssh\n");
+            enter_cmd("DISPLAY= yast.ssh");
             save_screenshot;
             #wait upgrade finish
             assert_screen('rebootnow', 2700);
@@ -119,28 +128,6 @@ sub login_to_console {
             #grub may not showup after upgrade because default GRUB_TERMINAL setting
             #when fixed in separate PR, will uncomment following line
             #assert_screen([qw(grub2 grub1)], 120);
-            my $upgrade_machine = get_var('SUT_IP', 'nosutip');
-            if (is_remote_backend && check_var('ARCH', 'aarch64') && ($upgrade_machine =~ /huawei/img)) {
-                wait_still_screen 10;
-                boot_local_disk_arm_huawei;
-            }
-            my $host_installed_version = get_var('VERSION_TO_INSTALL', get_var('VERSION', ''));
-            ($host_installed_version) = $host_installed_version =~ /^(\d+)/im;
-            my $host_upgrade_version = get_required_var('UPGRADE_PRODUCT');    #format sles-15-sp0
-            my ($host_upgrade_relver) = $host_upgrade_version =~ /sles-(\d+)-sp/i;
-            my ($host_upgrade_spver)  = $host_upgrade_version =~ /sp(\d+)$/im;
-            if (($host_installed_version eq '11') && (($host_upgrade_relver eq '15' && $host_upgrade_spver eq '0') || ($host_upgrade_relver eq '12' && $host_upgrade_spver eq '5'))) {
-                assert_screen('sshd-server-started-config', 180);
-                use_ssh_serial_console;
-                save_screenshot;
-                #start system first configuration after finishing upgrading from sles-11-sp4
-                type_string("yast.ssh\n");
-                assert_screen('will-linux-login', $timeout);
-                select_console('sol', await_console => 0);
-                save_screenshot;
-                send_key 'ret';
-                save_screenshot;
-            }
         }
         #setup vars
         set_var("reboot_for_upgrade_step", undef);
@@ -158,6 +145,8 @@ sub login_to_console {
         send_key 'ret';
     }
 
+    # Set ssh console timeout for thunderx machine
+    set_ssh_console_timeout_before_use if (is_remote_backend && check_var('ARCH', 'aarch64') && get_var('IPMI_HW') eq 'thunderx');
     # use console based on ssh to avoid unstable ipmi
     use_ssh_serial_console;
 
@@ -166,6 +155,20 @@ sub login_to_console {
 sub run {
     my $self = shift;
     $self->login_to_console;
+}
+
+sub post_fail_hook {
+    my ($self) = @_;
+    if (check_var('PERF_KERNEL', '1')) {
+        select_console 'log-console';
+        save_screenshot;
+        script_run "save_y2logs /tmp/y2logs.tar.bz2";
+        upload_logs "/tmp/y2logs.tar.bz2";
+        save_screenshot;
+    }
+    else {
+        $self->SUPER::post_fail_hook;
+    }
 }
 
 1;

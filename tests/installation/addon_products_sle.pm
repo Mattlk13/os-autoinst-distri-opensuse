@@ -77,13 +77,7 @@ sub handle_all_packages_medium {
     # Also record the addons which require license agreement
     my @addons_with_license = qw(ha we);
     my @addons_license_tags = ();
-    # The workaround is added, because needle containing description is the only
-    # way to ensure the certain module is selected on s390x.
-    record_soft_failure('bsc#1157780 - Module description is not appeared when
-    "Basesystem Module" is selected for the first time');
-    send_key 'down';
-    send_key 'end';
-    send_key 'tab' if (check_var('VIDEOMODE', 'text'));
+    send_key_until_needlematch 'addon-base-activated', 'tab' if (check_var('VIDEOMODE', 'text'));
     for my $i (@addons) {
         next if (skip_package_hub_if_necessary($i));
         push @addons_license_tags, "addon-license-$i" if grep(/^$i$/, @addons_with_license);
@@ -134,7 +128,7 @@ sub handle_addon {
     if (match_has_tag('import-untrusted-gpg-key')) {
         handle_untrusted_gpg_key;
     }
-    send_key 'tab';    # select addon-products-$addon
+    send_key 'tab';                          # select addon-products-$addon
     wait_still_screen 10;
     if (check_var('VIDEOMODE', 'text')) {    # textmode need more tabs, depends on add-on count
         send_key_until_needlematch "addon-list-selected", 'tab';
@@ -171,9 +165,9 @@ sub run {
         if ($self->process_unsigned_files([qw(inst-addon addon-products)])) {
             assert_screen_with_soft_timeout(
                 [qw(inst-addon addon-products)],
-                timeout      => 60,
-                soft_timeout => 30,
-                bugref       => 'bsc#1123963');
+                timeout      => check_var('BACKEND', 'pvm_hmc') ? 600 : 120,
+                soft_timeout => 60,
+                bugref       => 'bsc#1166504');
         }
     }
     if (get_var("ADDONS")) {
@@ -234,7 +228,7 @@ sub run {
                     assert_screen "addon-license-beta";
                 }
                 wait_still_screen 2;
-                send_key 'alt-a';                                  # yes, agree
+                send_key 'alt-a';    # yes, agree
                 wait_still_screen 2;
                 send_key $cmd{next};
                 assert_screen 'addon-products', 90;
@@ -242,9 +236,9 @@ sub run {
             elsif (match_has_tag('import-untrusted-gpg-key')) {
                 handle_untrusted_gpg_key;
             }
-            send_key "tab";                                        # select addon-products-$addon
-            wait_still_screen 10;                                  # wait until repo is added and list is initialized
-            if (check_var('VIDEOMODE', 'text')) {                  # textmode need more tabs, depends on add-on count
+            send_key "tab";                          # select addon-products-$addon
+            wait_still_screen 10;                    # wait until repo is added and list is initialized
+            if (check_var('VIDEOMODE', 'text')) {    # textmode need more tabs, depends on add-on count
                 send_key_until_needlematch "addon-list-selected", 'tab';
             }
             send_key "pgup";

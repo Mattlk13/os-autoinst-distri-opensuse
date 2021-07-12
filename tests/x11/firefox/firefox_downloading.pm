@@ -8,6 +8,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: MozillaFirefox
 # Summary: Case#1436106: Firefox: Downloading
 # - Launch xterm, kill firefox, cleanup previous firefox configuration, launch
 # firefox
@@ -37,13 +38,12 @@ use testapi;
 use version_utils 'is_sle';
 
 my $dl_link_01 = "http://mirrors.kernel.org/opensuse/distribution/leap/15.1/iso/openSUSE-Leap-15.1-DVD-x86_64.iso";
-my $dl_link_02 = "http://mirrors.kernel.org/opensuse/distribution/leap/15.0/iso/openSUSE-Leap-15.0-DVD-x86_64.iso";
+my $dl_link_02 = "http://mirrors.kernel.org/opensuse/distribution/leap/15.2/iso/openSUSE-Leap-15.2-DVD-x86_64.iso";
 
 sub dl_location_switch {
     my ($tg) = @_;
-    wait_screen_change {
-        send_key "alt-e";
-    };
+    send_key "alt-e";
+    wait_still_screen 2, 4;
     send_key "n";
     assert_screen('firefox-preferences');
 

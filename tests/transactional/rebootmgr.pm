@@ -7,6 +7,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: rebootmgr
 # Summary: Test rebootmgr using different strategies
 # Maintainer: Martin Kravec <mkravec@suse.com>
 # Tags: poo#16266
@@ -18,6 +19,7 @@ use testapi;
 use transactional;
 use utils;
 use version_utils 'is_tumbleweed';
+use Utils::Backends 'is_pvm';
 
 # Optionally skip exit status check in case immediate reboot is expected
 sub rbm_call {
@@ -51,8 +53,8 @@ sub rbm_set_window {
 #1 Test instant reboot
 sub check_strategy_instantly {
     rbm_call "set-strategy instantly";
-    trup_call "reboot ptf install" . rpmver('interactive'), 0;
-    process_reboot;
+    trup_call "reboot ptf install" . rpmver('interactive');
+    process_reboot(expected_grub => is_pvm() ? 0 : 1);
     rbm_call "get-strategy | grep instantly";
 }
 
@@ -62,8 +64,8 @@ sub check_strategy_maint_window {
 
     # Trigger reboot during maint-window
     rbm_set_window '-5minutes';
-    trup_call "reboot pkg install" . rpmver('feature'), 0;
-    process_reboot;
+    trup_call "reboot pkg install" . rpmver('feature');
+    process_reboot(expected_grub => is_pvm() ? 0 : 1);
 
     # Trigger reboot and wait for maintenance window
     rbm_set_window '+2minutes';
@@ -104,7 +106,7 @@ sub check_strategy_etcd_lock {
 }
 
 sub run {
-    type_string "tput civis\n";
+    enter_cmd "tput civis";
 
     record_info 'Instantly', 'Test instant reboot';
     check_strategy_instantly;

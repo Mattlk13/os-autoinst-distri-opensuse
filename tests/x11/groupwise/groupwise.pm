@@ -7,6 +7,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: novell-groupwise-gwclient
 # Summary: Groupwise client check
 # - Stop packagekit service
 # - Add groupwise repository
@@ -26,7 +27,7 @@ use utils;
 
 sub run() {
     select_console('root-console');
-    pkcon_quit;
+    quit_packagekit;
 
     # add repository and install groupwise
     zypper_call("ar http://download.suse.de/ibs/SUSE:/Factory:/Head:/Internal/standard/ groupwise_repo");

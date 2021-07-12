@@ -8,13 +8,9 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: nautilus
 # Summary: Test nautilus open ftp
-# - Launch nautilus
-# - Inside nautilus, open "ftp://ftp.suse.com" and check
-# - Send "SHIFT-F10" and check
-# - Umount ftp
-# - Close nautilus
-# Maintainer: Oliver Kurz <okurz@suse.de>
+# Maintainer: QE Core <qe-core@suse.de>
 # Tags: tc#1436143
 
 
@@ -27,19 +23,14 @@ use version_utils qw(is_sle is_tumbleweed);
 sub run {
     x11_start_program('nautilus');
     wait_screen_change { send_key 'ctrl-l' };
-    type_string "ftp://ftp.suse.com\n";
+    enter_cmd "ftp://ftp.suse.com";
     assert_screen 'nautilus-ftp-login';
     send_key 'ret';
     assert_screen 'nautilus-ftp-suse-com';
-    if (is_sle('12-SP2+') || is_tumbleweed) {
-        assert_and_click 'unselected-pub';
-        assert_and_click 'ftp-path-selected';
-        wait_still_screen(2);
-    }
-    send_key 'shift-f10';
+    assert_and_click('ftp-path-selected', button => 'right');
     assert_screen 'nautilus-ftp-rightkey-menu';
     # unmount ftp
-    send_key 'alt-u';
+    assert_and_click 'nautilus-unmount';
     assert_screen 'nautilus-launched';
     send_key 'ctrl-w';
 }

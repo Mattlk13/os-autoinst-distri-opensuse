@@ -8,6 +8,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: zypper
 # Summary: new test that adds configured repositories
 # Maintainer: Ludwig Nussel <ludwig.nussel@suse.de>
 
@@ -15,14 +16,14 @@ use base "consoletest";
 use strict;
 use warnings;
 use testapi;
-use utils qw(pkcon_quit zypper_call);
+use utils qw(quit_packagekit zypper_call);
 
 sub run {
     my $val = get_var("ZYPPER_ADD_REPOS");
     return unless $val;
 
     select_console 'root-console';
-    pkcon_quit;
+    quit_packagekit;
     my $prefix = get_var("ZYPPER_ADD_REPO_PREFIX", 'openqa');
 
     my $i = 0;

@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright © 2019 SUSE LLC
+# Copyright © 2019-2020 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -10,6 +10,7 @@
 # All of cases is based on the reference:
 # https://documentation.suse.com/sles/15-SP1/single-html/SLES-admin/#id-1.3.3.6.13.6.11
 #
+# Package: yast2-dns-server bind bind-libs
 # Summary: Create DNS forwarder and DNS server, verify lookup.
 #
 # 1. Create a sub to handle command and verify it result
@@ -70,11 +71,19 @@ sub run {
     select_console 'root-console';
     zypper_call("in yast2-dns-server bind", exitcode => [0, 102, 103, 106]);
     zypper_call("in bind-libs",             exitcode => [0, 102, 103, 106]) if is_sle('=12-SP2');
+    #enables netconfig to always force a replace of modified file to avoid ncurse prompt.
+    assert_script_run(qq(sed -i 's/NETCONFIG_FORCE_REPLACE="no"/NETCONFIG_FORCE_REPLACE="yes"/' /etc/sysconfig/network/config));
 
     #Forward server and test lookup
+    my $opensuseip = script_output("dig www.opensuse.org +short");
+    $opensuseip =~ s/.*^(\d+\.\d+\.\d+\.\d+).*/$1/ms;
     $self->cmd_handle("forwarders", "add", ip => "10.0.2.3");
+    #disable dnssec validation
+    assert_script_run("sed -i 's/#dnssec-validation auto/dnssec-validation no/' /etc/named.conf");
     systemctl("start named.service");
-    validate_script_output('dig @localhost www.suse.com +short', sub { /\Q130.57.66.10\E/ });
+    validate_script_output('dig @localhost www.opensuse.org +short', sub { /\Q$opensuseip\E/ });
+
+    assert_script_run("sed -i 's/dnssec-validation no/#dnssec-validation auto/' /etc/named.conf");
     $self->cmd_handle("forwarders", "remove", ip => "10.0.2.3");
     record_soft_failure("bsc#1151138") if (systemctl("is-active named.service", ignore_failure => 1));
 
@@ -99,8 +108,8 @@ sub run {
     #i.e. dnsrecord add zone=example.org query=example.org. type=MX value='10 mail01'
     $self->cmd_handle("dnsrecord", "add",    zone => "example.org", query => "subdomain.example.org.", type => "NS", value => "ns1");    #delegated domain
     $self->cmd_handle("dnsrecord", "remove", zone => "example.org", query => "subdomain.example.org.", type => "NS", value => "ns1");
-    $self->cmd_handle("dnsrecord", "add",    zone => "example.org", query => "host1", type => "A", value => "192.168.100.3");            #host adress
-    $self->cmd_handle("dnsrecord", "remove", zone => "example.org", query => "host1", type => "A", value => "192.168.100.3");
+    $self->cmd_handle("dnsrecord", "add",    zone => "example.org", query => "host1",                  type => "A",  value => "192.168.100.3");    #host adress
+    $self->cmd_handle("dnsrecord", "remove", zone => "example.org", query => "host1",                  type => "A",  value => "192.168.100.3");
 
     $self->cmd_handle("dnsrecord", "add",    zone => "100.168.192.in-addr.arpa", query => "123", type => "PTR",   value => "host1");                    ##PTR
     $self->cmd_handle("dnsrecord", "remove", zone => "100.168.192.in-addr.arpa", query => "123", type => "PTR",   value => "host1");
@@ -123,6 +132,7 @@ sub run {
     $self->cmd_handle("zones", "remove", name => "example.org",              zonetype => "master");
     $self->cmd_handle("zones", "remove", name => "100.168.192.in-addr.arpa", zonetype => "master");
     disable_and_stop_service('named.service');
+    assert_script_run(qq(sed -i 's/NETCONFIG_FORCE_REPLACE="yes"/NETCONFIG_FORCE_REPLACE="no"/' /etc/sysconfig/network/config));
 }
 
 1;

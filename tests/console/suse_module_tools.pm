@@ -1,12 +1,13 @@
 # SUSE's openQA tests
 #
-# Copyright © 2019 SUSE LLC
+# Copyright © 2019-2020 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: mokutil pesign-obs-integration
 # Summary: Testing functionality of modhash and modsign-verify commands.
 # A random module from available loadable modules on the system is picked
 # for testing purposes.
@@ -22,7 +23,8 @@ use utils 'zypper_call';
 use version_utils qw(is_sle is_tumbleweed);
 
 sub run {
-    select_console 'root-console';
+    my $self = shift;
+    $self->select_serial_terminal;
 
     # Find a random module available on the system
     # Get a list of all modules

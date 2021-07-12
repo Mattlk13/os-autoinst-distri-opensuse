@@ -8,10 +8,11 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: tracker
 # Summary: Tracker: search from command line
 # - Launch xterm
 # - Run "tracker-search newfile" if version is older than SLE12SP2
-# - Otherwise, run "tracker search emtpyfile"
+# - Otherwise, run "tracker search emptyfile"
 # - Wait 20 seconds, run "tracker search newfile"
 # - Check output of command
 # - Close xterm
@@ -23,7 +24,7 @@ use strict;
 use warnings;
 use testapi;
 use utils;
-use version_utils 'is_sle';
+use version_utils qw(is_sle is_leap);
 
 sub run {
     x11_start_program('xterm');
@@ -31,11 +32,10 @@ sub run {
         script_run "tracker-search newfile";
     }
     else {
-        script_run 'tracker search emtpyfile';
-        record_soft_failure 'bsc#1074582 tracker can not index empty file automatically' if check_screen 'tracker-cmdsearch-noemptyfile', 30;
-        # Wait 20s for tracker to index the test file
-        wait_still_screen 20;
-        script_run "tracker search newfile";
+        my $trackercmd = (is_sle('<16') or is_leap('<16.0')) ? 'tracker' : 'tracker3';
+        script_run "$trackercmd search emptyfile";
+        assert_screen('tracker-cmdsearch-emptyfile');
+        script_run "$trackercmd search newfile";
     }
     assert_screen 'tracker-cmdsearch-newfile';
     send_key 'alt-f4';

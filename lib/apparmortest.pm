@@ -1,4 +1,4 @@
-# Copyright (C) 2017-2020 SUSE LLC
+# Copyright (C) 2017-2021 SUSE LLC
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -41,6 +41,9 @@ our @EXPORT = qw(
   $prof_dir
   $adminer_file
   $adminer_dir
+  create_a_test_profile_name_is_special
+  create_log_content_is_special
+  test_profile_content_is_special
 );
 
 our $prof_dir      = "/etc/apparmor.d";
@@ -82,7 +85,10 @@ sub aa_tmp_prof_prepare {
     if ($type == 0) {
         assert_script_run "mkdir $prof_dir_tmp";
         assert_script_run "cp -r $prof_dir/{tunables,abstractions} $prof_dir_tmp/";
-        if (is_sle('<15') or is_leap('<15.0')) {    # apparmor < 2.8.95
+        if (!(is_sle('<16') or is_leap('<16.0'))) {    # apparmor >= 3.0
+            assert_script_run "cp -r $prof_dir/abi $prof_dir/disable $prof_dir_tmp/";
+        }
+        if (is_sle('<15') or is_leap('<15.0')) {       # apparmor < 2.8.95
             assert_script_run "cp -r $prof_dir/program-chunks $prof_dir/disable $prof_dir_tmp/";
         }
     }
@@ -546,15 +552,15 @@ sub adminer_setup {
     # Clean and Start Firefox
     x11_start_program('xterm');
     turn_off_gnome_screensaver if check_var('DESKTOP', 'gnome');
-    type_string("killall -9 firefox; rm -rf .moz* .config/iced* .cache/iced* .local/share/gnome-shell/extensions/* \n");
-    type_string("firefox http://localhost/adminer/$adminer_file &\n");
+    enter_cmd("killall -9 firefox; rm -rf .moz* .config/iced* .cache/iced* .local/share/gnome-shell/extensions/* ");
+    enter_cmd("firefox http://localhost/adminer/$adminer_file &");
 
     my $ret;
-    $ret = check_screen([qw(adminer-login unresponsive-script)], timeout => 300);
+    $ret = check_screen([qw(adminer-login unresponsive-script)], timeout => 300);    # nocheck: old code, should be updated
     if (!defined($ret)) {
         # Wait more time
         record_info("Firefox loading adminer failed", "Retrying workaround");
-        check_screen([qw(adminer-login unresponsive-script)], timeout => 300);
+        check_screen([qw(adminer-login unresponsive-script)], timeout => 300);       # nocheck: old code, should be updated
     }
     if (match_has_tag("unresponsive-script")) {
         send_key_until_needlematch("adminer-login", 'ret', 5, 5);
@@ -619,17 +625,129 @@ sub adminer_database_delete {
     assert_screen("adminer-save-passwd");
     send_key "alt-s";
     assert_screen("adminer-select-database");
-    send_key_until_needlematch("adminer-select-database-test", 'tab', 30, 5);
-    assert_screen("adminer-select-database-test");
-    send_key "spc";
-    send_key_until_needlematch("adminer-database-dropped", 'ret', 10, 5);
+    assert_and_click("adminer-click-database-test");
+    assert_and_click("adminer-click-drop-database-test");
+    # Confirm drop
+    send_key_until_needlematch("adminer-database-dropped", 'ret', 10, 1);
+    # Exit x11 and turn to console
+    send_key "alt-f4";
+    # Handle exceptions when "Quit and close tabs" in Firefox, the warning FYI:
+    # "You are about to close 2 tabs. Are you sure want to continue?"
+    if (check_screen("firefox-quit-and-close-tabs", 5)) {
+        assert_and_click("firefox-close-tabs");
+    }
+    assert_screen("generic-desktop");
+    select_console("root-console");
+    send_key "ctrl-c";
+    clear_console;
+}
 
+# Yast2 Apparmor set up
+sub yast2_apparmor_setup {
+    # Start Apparmor in case and check it is active
+    systemctl("start apparmor");
+    systemctl("is-active apparmor");
+
+    # Turn to x11 and start "xterm"
+    select_console("x11");
+    x11_start_program("xterm");
+    become_root;
+}
+
+# Yast2 Apparmor: check apparmor is enabled
+sub yast2_apparmor_is_enabled {
+    enter_cmd("yast2 apparmor &");
+    assert_screen("AppArmor-Configuration-Settings", timeout => 180);
+    send_key "alt-l";
+    assert_screen("AppArmor-Settings-Enable-Apparmor");
+}
+
+# Yast2 Apparmor clean up
+sub yast2_apparmor_cleanup {
     # Exit x11 and turn to console
     send_key "alt-f4";
     assert_screen("generic-desktop");
     select_console("root-console");
     send_key "ctrl-c";
     clear_console;
+
+    # Upload logs for reference
+    upload_logs("$audit_log");
+}
+
+# Create a test profile with name contains '('
+sub create_a_test_profile_name_is_special {
+    my ($testfile, $str) = @_;
+
+    my $testfile2 = "$testfile" . "$str";
+    assert_script_run("cp $testfile $testfile2");
+    assert_script_run("aa-autodep $testfile2");
+    assert_script_run("ll /etc/apparmor.d/ | grep $str");
+}
+
+# Refer to "https://bugs.launchpad.net/apparmor/+bug/1848227"
+# to create a test profile with content "local include above the '}'",
+# then run "aa-complain, aa-disable, aa-enforce, aa-logprof"
+# to verify all the commands should be succeeded
+sub test_profile_content_is_special {
+    my ($self, $cmd, $msg) = @_;
+    my $test          = "test_profile";
+    my $test_profile  = "/etc/apparmor.d/usr.sbin." . "$test";
+    my $local_profile = "/etc/apparmor.d/local/usr.sbin.cupsd";
+
+    # Create an empty local profile under "/etc/apparmor.d/local/"
+    assert_script_run("rm -rf $local_profile");
+    assert_script_run("touch $local_profile");
+
+    # Create a test profile under "/etc/apparmor.d/"
+    assert_script_run("echo '/usr/sbin/cupsd {' > $test_profile");
+    assert_script_run("echo '}' >> $test_profile");
+    assert_script_run("echo '#include <local/usr.sbin.cupsd>' >> $test_profile");
+
+    # Run aa-* commands and check the output
+    my $current_ver = script_output("rpm -q --qf '%{version}' apparmor-utils");
+
+    my $cmd1 = $cmd eq "aa-logprof" ? $cmd : "$cmd $test_profile";
+    my $ret  = script_run($cmd1, sub { m/$msg/ });
+    if ($ret == 0) {
+        if ("$cmd" eq "aa-disable") {
+            # The profile will not be listed out if disabled
+            my $ret = script_run("aa-status | grep $test");
+            if ($ret == 0) {
+                $self->result("fail");
+            }
+        }
+    }
+    elsif ($ret && ($current_ver lt "2.13.4")) {
+        record_soft_failure("bsc#1182840 - apparmor commands \"aa_*\" reports errors when profile name/content and audit log have some exceptions");
+    }
+
+    # Clean up
+    assert_script_run("rm -rf $test_profile");
+    assert_script_run("rm -rf $local_profile");
+}
+
+# Refer to "https://apparmor.net/news/release-2.13.4/" setup env to verify the fix:
+# "Fix crash when log message contains a filename with unbalanced parenthesis".
+# Create a test profile with content "local include above the '}'" in order
+# to run "aa-logprof" to verify the commands should be succeeded
+sub create_log_content_is_special {
+    my ($self, $testfile, $test_special) = @_;
+
+    # Enable & Start auditd service
+    systemctl("enable auditd");
+    systemctl("start auditd");
+
+    # Clean up audit log
+    assert_script_run("echo '' > $audit_log");
+
+    # Generate an audit record which "contains a filename with unbalanced parenthesis"
+    assert_script_run("cp $testfile $test_special");
+    assert_script_run("aa-autodep $test_special");
+    assert_script_run("$test_special ./");
+
+    # Check the record which "contains a filename with unbalanced parenthesis"
+    validate_script_output("cat $audit_log", sub { m/.*type=AVC.*profile=.*$test_special.*/sx });
 }
 
 =head2 upload_logs_mail
@@ -665,6 +783,7 @@ sub pre_run_hook {
     select_console 'root-console';
     systemctl('restart auditd');
     systemctl('restart apparmor');
+    $self->SUPER::pre_run_hook;
 }
 
 =head2 post_fail_hook

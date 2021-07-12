@@ -5,10 +5,12 @@ description:    >
   them for RAID 5.
 vars:
   RAIDLEVEL: 5
+  YUI_REST_API: 1
 schedule:
   - installation/bootloader_start
-  - installation/welcome
-  - installation/accept_license
+  - installation/setup_libyui
+  - installation/product_selection/select_product
+  - installation/licensing/accept_license
   - installation/scc_registration
   - installation/addon_products_sle
   - installation/system_role
@@ -16,8 +18,8 @@ schedule:
   - installation/partitioning/raid_gpt
   - installation/installer_timezone
   - installation/hostname_inst
-  - installation/user_settings
-  - installation/user_settings_root
+  - installation/authentication/use_same_password_for_root
+  - installation/authentication/default_user_simple_pwd
   - installation/resolve_dependency_issues
   - installation/installation_overview
   - installation/disable_grub_timeout
@@ -31,12 +33,20 @@ schedule:
   - console/system_prepare
   - console/force_scheduled_tasks
   - shutdown/grub_set_bootargs
+  - console/validate_md_raid
   - console/validate_raid
 test_data:
+  product: SLES
+  <<: !include test_data/yast/raid/raid_gpt_disks_with_bios-boot.yaml
   mds:
     - raid_level: 5
-      chunk_size: 64
-      device_selection_step: 2
+      name: md0
+      chunk_size: '64 KiB'
+      devices:
+        - vda2
+        - vdb2
+        - vdc2
+        - vdd2
       partition:
         role: operating-system
         formatting_options:
@@ -44,13 +54,17 @@ test_data:
         mounting_options:
           should_mount: 1
     - raid_level: 0
-      chunk_size: 64
-      device_selection_step: 1
+      name: md1
+      chunk_size: '64 KiB'
+      devices:
+        - vda3
+        - vdb3
+        - vdc3
+        - vdd3
       partition:
-        role: operating-system
+        role: swap
         formatting_options:
           should_format: 1
           filesystem: swap
         mounting_options:
           should_mount: 1
-  !include: test_data/yast/raid/raid_gpt_disks_with_bios-boot.yaml

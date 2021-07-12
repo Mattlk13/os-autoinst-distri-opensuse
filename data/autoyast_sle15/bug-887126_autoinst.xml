@@ -31,7 +31,6 @@
       <gfxtheme>/boot/grub2/themes/SLE/theme.txt</gfxtheme>
       <hiddenmenu>false</hiddenmenu>
       <os_prober>true</os_prober>
-      <suse_btrfs>true</suse_btrfs>
       <terminal>gfxterm</terminal>
       <timeout config:type="integer">-1</timeout>
     </global>
@@ -88,7 +87,6 @@
       <import_gpg_key config:type="boolean">true</import_gpg_key>
     </signature-handling>
     <storage>
-      <partition_alignment config:type="symbol">align_optimal</partition_alignment>
       <start_multipath config:type="boolean">false</start_multipath>
     </storage>
   </general>
@@ -360,33 +358,6 @@
       <timeout config:type="integer">0</timeout>
     </yesno_messages>
   </report>
-  <runlevel>
-    <default_target>graphical</default_target>
-    <services config:type="list">
-      <service>cron</service>
-      <service>getty@tty1</service>
-      <service>getty@tty2</service>
-      <service>getty@tty3</service>
-      <service>getty@tty4</service>
-      <service>getty@tty5</service>
-      <service>getty@tty6</service>
-      <service>haveged</service>
-      <service>irqbalance</service>
-      <service>kdump</service>
-      <service>nscd</service>
-      <service>postfix</service>
-      <service>purge-kernels</service>
-      <service>rsyslog</service>
-      <service>wicked</service>
-      <service>wickedd-auto4</service>
-      <service>wickedd-dhcp4</service>
-      <service>wickedd-dhcp6</service>
-      <service>wickedd-nanny</service>
-      <service>wickedd</service>
-      <service>YaST2-Firstboot</service>
-      <service>YaST2-Second-Stage</service>
-    </services>
-  </runlevel>
   <services-manager>
     <default_target>graphical</default_target>
     <services config:type="list">
@@ -415,7 +386,6 @@
     </services>
   </services-manager>
   <software>
-    <image/>
     <instsource/>
     <packages config:type="list">
       <package>at-spi2-atk-common</package>
@@ -449,7 +419,6 @@
       <package>yast2-nis-client</package>
       <package>yast2-printer</package>
       <package>yast2-snapper</package>
-      <package>yast2-trans-en_US</package>
       <package>yast2-x11</package>
     </packages>
     <patterns config:type="list">

@@ -3,19 +3,12 @@ use warnings;
 use Test::More;
 use Test::Exception;
 use Test::Warnings;
-use FindBin;
-
-# This is required to be able to read
-# packages in distri's lib/ folder.
-# Alternatively it can be supplied as -I option
-# while running prove.
-use lib ("$FindBin::Bin/lib", "$FindBin::Bin/../lib");
 
 use testapi qw(check_var get_var set_var);
 
 subtest 'check_version' => sub {
     # compare versions if possible
-    ok version_utils::check_version($_, '15.5'),  "check $_, 15.5" for qw(>15.0 <15.10);
+    ok version_utils::check_version($_,  '15.5'), "check $_, 15.5" for qw(>15.0 <15.10);
     ok !version_utils::check_version($_, '15.5'), "check $_, 15.5" for qw(=15.50 >=15.10);
 
     # compare strings if not
@@ -30,18 +23,21 @@ subtest 'check_version' => sub {
     for (qw(=1.3+ >1.3+ <>1.3 > 12 abc)) {
         dies_ok { version_utils::check_version($_, '12-sp3') } "check $_, 12-sp3";
     }
+
+    ok version_utils::check_version($_,  '10.5.0-Maria'), "check $_, 15.5"   for qw(>10.4.4 10.4+ >=10.4-Maria >10.3.0-MySQL);
+    ok !version_utils::check_version($_, '10.5.1'),       "check $_, 10.5.1" for qw(=10.4.9 <10.5.0);
 };
 
-subtest 'is_caasp' => sub {
-    use version_utils 'is_caasp';
+subtest 'is_microos' => sub {
+    use version_utils 'is_microos';
 
-    set_var('DISTRI', 'caasp');
+    set_var('DISTRI', 'microos');
 
-    ok is_caasp;
+    ok is_microos;
 
     set_var('DISTRI', undef);
 
-    ok !is_caasp;
+    ok !is_microos;
 };
 
 subtest 'is_leap' => sub {
@@ -77,6 +73,41 @@ subtest 'is_sle' => sub {
 
     set_var('VERSION', '12-SP2');
     ok is_sle($_), "check $_" for qw(=12-sp2 =12-sP2 <=15 >11-sp3 <12-sp3 >12-sp1 <12-SP3 >12-SP1);
+};
+
+subtest 'package_version_cmp' => sub {
+    use version_utils 'package_version_cmp';
+
+    ok(package_version_cmp('1.2.3-4.5',   '1.2.3-4.5') == 0,   '1.2.3-4.5 == 1.2.3-4.5');
+    ok(package_version_cmp('1.2.3-4.5.0', '1.2.3-4.5') == 0,   '1.2.3-4.5.0 == 1.2.3-4.5');
+    ok(package_version_cmp('1.2.3-4.5',   '1.2.3-4.5.0') == 0, '1.2.3-4.5 == 1.2.3-4.5.0');
+    ok(package_version_cmp('1.2.3-4.5.1', '1.2.3-4.5') > 0,    '1.2.3-4.5.1 > 1.2.3-4.5');
+    ok(package_version_cmp('1.2.3-4.5',   '1.2.3-4.5.1') < 0,  '1.2.3-4.5 < 1.2.3-4.5.1');
+    ok(package_version_cmp('1.2.3-4.6',   '1.2.3-4.5') > 0,    '1.2.3-4.6 > 1.2.3-4.5');
+    ok(package_version_cmp('1.2.3-4.5',   '1.2.3-4.6') < 0,    '1.2.3-4.5 < 1.2.3-4.6');
+    ok(package_version_cmp('1.2.3-5.1',   '1.2.3-4.5') > 0,    '1.2.3-5.1 > 1.2.3-4.5');
+    ok(package_version_cmp('1.2.3-4.5',   '1.2.3-5.1') < 0,    '1.2.3-4.5 < 1.2.3-5.1');
+
+    ok(package_version_cmp('1.2.0-4.5',   '1.2-4.5') == 0,    '1.2.0-4.5 == 1.2-4.5');
+    ok(package_version_cmp('1.2-4.5',     '1.2.0-4.5') == 0,  '1.2-4.5 == 1.2.0-4.5');
+    ok(package_version_cmp('1.2.3.1-4.5', '1.2.3-4.5') > 0,   '1.2.3.1-4.5 > 1.2.3-4.5');
+    ok(package_version_cmp('1.2.3-4.5',   '1.2.3.1-4.5') < 0, '1.2.3-4.5 < 1.2.3.1-4.5');
+    ok(package_version_cmp('1.2.4-4.5',   '1.2.3-4.5') > 0,   '1.2.4-4.5 > 1.2.3-4.5');
+    ok(package_version_cmp('1.2.3-4.5',   '1.2.4-4.5') < 0,   '1.2.3-4.5 < 1.2.4-4.5');
+    ok(package_version_cmp('1.2.3.4-4',   '1.2.3-4.5') > 0,   '1.2.3-4.5 > 1.2.3-4.5');
+    ok(package_version_cmp('1.2.3-4.5',   '1.2.3.4-4') < 0,   '1.2.3-4.5 < 1.2.3-4.5');
+
+    ok(package_version_cmp('1.2.3-4.5a', '1.2.3-4.5a') == 0, '1.2.3-4.5a == 1.2.3-4.5a');
+    ok(package_version_cmp('1.2.3-4.5a', '1.2.3-4.5b') < 0,  '1.2.3-4.5a < 1.2.3-4.5b');
+    ok(package_version_cmp('1.2.3-4.5b', '1.2.3-4.5a') > 0,  '1.2.3-4.5b > 1.2.3-4.5a');
+    ok(package_version_cmp('1.2.3a-4.5', '1.2.3a-4.5') == 0, '1.2.3a-4.5 == 1.2.3-4.5');
+    ok(package_version_cmp('1.2.3a-4.5', '1.2.3b-4.5') < 0,  '1.2.3a-4.5 < 1.2.3-4.5');
+    ok(package_version_cmp('1.2.3b-4.5', '1.2.3a-4.5') > 0,  '1.2.3a-4.5 > 1.2.3-4.5');
+
+    ok(package_version_cmp('5.3.18-198.1.g6b7890d', '5.3.18-200.1.g3e09edd') < 0,
+        '5.3.18-198.1.g6b7890d < 5.3.18-200.1.g3e09edd ');
+    ok(package_version_cmp('5.3.18-200.1.g3e09edd ', '5.3.18-198.1.g6b7890d') > 0,
+        '5.3.18-200.1.g3e09edd > 5.3.18-198.1.g6b7890d');
 };
 
 done_testing;

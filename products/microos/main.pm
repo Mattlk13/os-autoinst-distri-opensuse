@@ -3,10 +3,13 @@ use warnings;
 use testapi qw(check_var get_var get_required_var);
 use needle;
 use File::Basename;
+use scheduler 'load_yaml_schedule';
 BEGIN {
     unshift @INC, dirname(__FILE__) . '/../../lib';
 }
 use utils;
+use Utils::Architectures qw(is_aarch64);
+use version_utils qw(is_staging);
 use main_common;
 
 init_main();
@@ -21,6 +24,10 @@ sub is_regproxy_required {
     return check_var('SYSTEM_ROLE', 'kubeadm');
 }
 
+sub is_image_flavor {
+    return get_required_var('FLAVOR') =~ /-Image/;
+}
+
 sub load_boot_from_dvd_tests {
     loadtest 'installation/bootloader_uefi' if (get_var("UEFI"));
     loadtest 'installation/bootloader' unless (get_var("UEFI"));
@@ -29,21 +36,32 @@ sub load_boot_from_dvd_tests {
 sub load_boot_from_disk_tests {
     # Preparation for start testing
     loadtest 'microos/disk_boot';
+    loadtest 'installation/system_workarounds' if is_aarch64;
+    loadtest 'transactional/enable_selinux'    if (get_var("ENABLE_SELINUX"));
     loadtest 'microos/networking';
+}
+
+sub load_tdup_tests {
+    loadtest 'transactional/tdup';
 }
 
 sub load_feature_tests {
     # Feature tests for Micro OS operating system
+    loadtest 'containers/k3s_cli_check' if get_required_var('FLAVOR') =~ /-k3s/;
     loadtest 'microos/libzypp_config';
+    loadtest 'microos/image_checks' if is_image_flavor;
     loadtest 'microos/one_line_checks';
     loadtest 'microos/services_enabled';
     load_transactional_role_tests;
-    loadtest 'microos/journal_check';
+    loadtest 'microos/cockpit_service' unless is_staging;
+    loadtest 'console/journal_check';
     if (check_var 'SYSTEM_ROLE', 'kubeadm') {
         loadtest 'console/kubeadm';
     }
     elsif (check_var 'SYSTEM_ROLE', 'container-host') {
-        loadtest 'console/podman';
+        loadtest 'microos/toolbox';
+        loadtest 'containers/podman';
+        loadtest 'containers/podman_image';
     }
 }
 
@@ -71,6 +89,7 @@ sub load_installation_tests {
         # Full list of installation test-modules can be found at 'main_common.pm'
         load_inst_tests unless get_var 'BOOT_HDD_IMAGE';
         load_boot_from_disk_tests;
+        load_tdup_tests             if (get_var 'TDUP');
         loadtest 'console/regproxy' if is_regproxy_required;
         load_feature_tests          if (check_var 'EXTRA', 'FEATURES');
         loadtest 'shutdown/shutdown';
@@ -80,13 +99,16 @@ sub load_installation_tests {
 #######################
 # Testing starts here #
 #######################
+return 1 if load_yaml_schedule;
+
 if (get_var 'STACK_ROLE') {
     load_boot_from_disk_tests;
+    load_tdup_tests      if (get_var 'TDUP');
     load_feature_tests() if (check_var 'EXTRA', 'FEATURES');
     loadtest 'shutdown/shutdown';
 }
 else {
-    load_boot_from_dvd_tests;
+    load_boot_from_dvd_tests unless get_var 'BOOT_HDD_IMAGE';
     if (get_var 'SYSTEM_ROLE') {
         load_installation_tests;
     }

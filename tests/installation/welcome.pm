@@ -1,7 +1,7 @@
 # SUSE's openQA tests
 #
 # Copyright © 2009-2013 Bernhard M. Wiedemann
-# Copyright © 2012-2019 SUSE LLC
+# Copyright © 2012-2020 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -21,7 +21,7 @@
 # - Save screenshot
 # - If necessary, change keyboard layout
 # - Proceed install (Next, next) until license on welcome screen is found
-# Maintainer: Oliver Kurz <okurz@suse.de>
+# Maintainer: QA SLE YaST team <qa-sle-yast@suse.de>
 
 use strict;
 use warnings;
@@ -68,9 +68,9 @@ sub get_product_shortcuts {
             sles => (is_ppc64le() || is_s390x()) ? 'u'
             : is_aarch64() ? 's'
             : 'i',
-            sled     => 'x',
+            sled => 'x',
             sles4sap => is_ppc64le() ? 'i'
-            : (is_sle('=15-SP2') && is_x86_64()) ? 't'
+            : (is_sle('15-SP2+') && is_x86_64() && !is_quarterly_iso()) ? 't'
             : 'p',
             hpc => is_x86_64() ? 'g' : 'u',
             rt  => is_x86_64() ? 't' : undef
@@ -81,8 +81,8 @@ sub get_product_shortcuts {
         sles     => 's',
         sled     => 'u',
         sles4sap => is_ppc64le() ? 'u' : 'x',
-        hpc      => is_x86_64() ? 'x' : 'u',
-        rt       => is_x86_64() ? 'u' : undef
+        hpc      => is_x86_64()  ? 'x' : 'u',
+        rt       => is_x86_64()  ? 'u' : undef
     );
 }
 
@@ -105,13 +105,16 @@ sub run {
     # Add tag to check for https://progress.opensuse.org/issues/30823 "test is
     # stuck in linuxrc asking if dhcp should be used"
     push @welcome_tags, 'linuxrc-dhcp-question';
-    ensure_fullscreen;
+    # repo key expired bsc#1179654
+    record_soft_failure 'bsc#1179654' if is_sle('=15');
+    push @welcome_tags, 'expired-gpg-key' if is_sle('=15');
 
     # Process expected pop-up windows and exit when welcome/beta_war is shown or too many iterations
     while ($iterations++ < scalar(@welcome_tags)) {
         # See poo#19832, sometimes manage to match same tag twice and test fails due to broken sequence
         wait_still_screen 5;
-        assert_screen(\@welcome_tags, 500);
+        my $timeout = check_var('ARCH', 'aarch64') ? '1000' : '500';
+        assert_screen(\@welcome_tags, $timeout);
         # Normal exit condition
         if ((match_has_tag 'inst-betawarning') || (match_has_tag 'inst-welcome') || (match_has_tag 'inst-welcome-no-product-list')) {
             last;
@@ -139,6 +142,9 @@ sub run {
             send_key 'tab' if (match_has_tag 'linuxrc-dhcp-question-no');
             send_key 'ret';
         }
+        if (match_has_tag 'expired-gpg-key') {
+            send_key 'alt-y';
+        }
     }
 
     # Process beta warning if expected
@@ -146,9 +152,18 @@ sub run {
         assert_screen 'inst-betawarning';
         wait_screen_change { send_key 'ret' };
     }
-    assert_screen((is_sle('15+') && get_var('UPGRADE')) ? 'inst-welcome-no-product-list' : 'inst-welcome');
+
+    ensure_fullscreen;
+
+    if (is_sle('15+') && get_var('UPGRADE')) {
+        assert_screen('inst-welcome-no-product-list');
+    }
+    else {
+        assert_screen('inst-welcome');
+    }
     mouse_hide;
     wait_still_screen(3);
+
 
     # license+lang +product (on sle15)
     # On sle 15 license is on different screen, here select the product

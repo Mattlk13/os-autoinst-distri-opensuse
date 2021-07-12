@@ -1,12 +1,13 @@
 # SUSE"s openQA tests
 #
-# Copyright © 2019 SUSE LLC
+# Copyright © 2019-2020 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: aaa_base
 # Summary: test that uses some aaa_base binaries command line tools to regression test.
 # - Creates directory /tmp/aaa_base_test
 # - Changes to /tmp/aaa_base_test directory
@@ -30,7 +31,9 @@ use warnings;
 use testapi;
 
 sub run {
-    select_console 'root-console';
+    my $self = shift;
+    $self->select_serial_terminal;
+
     #create work dir
     assert_script_run "mkdir /tmp/aaa_base_test ; cd /tmp/aaa_base_test; touch test-file.txt ; mkdir test_dir";
 

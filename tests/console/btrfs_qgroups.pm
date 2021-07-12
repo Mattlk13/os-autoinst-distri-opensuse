@@ -1,12 +1,13 @@
 # SUSE's openQA tests
 #
-# Copyright © 2016-2017 SUSE LLC
+# Copyright © 2016-2021 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: btrfsprogs
 # Summary: Btrfs quota group limit tests improvements
 #	 Creating qgroups in a hierarchy for multiple subvolumes,
 #	 putting data into them and then running btrfsck on the hard disk
@@ -31,7 +32,7 @@ my $dest = "/mnt/qg";
 # poo#11446
 sub run {
     my ($self) = @_;
-    select_console 'root-console';
+    $self->select_serial_terminal;
 
     # Set up
     assert_script_run "mkdir $dest";
@@ -76,8 +77,8 @@ sub run {
     assert_script_run "for c in {5..10}; do dd if=/dev/zero bs=1M count=10 of=k/file\$c; done";
 
     # Show structure
-    type_string "sync\n";
-    type_string "btrfs qgroup show --mbytes -pcre .\n";
+    enter_cmd "sync";
+    enter_cmd "btrfs qgroup show --mbytes -pcre .";
 
     # Check limits
     assert_script_run "dd if=/dev/zero bs=10M count=3 of=nofile";
@@ -103,11 +104,11 @@ sub run {
     assert_script_run 'rm e/file', fail_message => 'bsc#993841';
     # test exceeding real quota
     my $files_creation = '! for c in {1..2}; do dd if=/dev/zero bs=1M count=190 of=e/file_$c; done';
-    assert_script_run $files_creation;
+    assert_script_run $files_creation, 150;
     if (script_run('rm e/file_*')) {
         record_soft_failure 'File removal test: bsc#1113042 - btrfs is not informed to commit transaction';
         assert_script_run 'sync';
-        assert_script_run $files_creation;
+        assert_script_run $files_creation, 150;
         assert_script_run 'rm -f e/file_*';
     }
 

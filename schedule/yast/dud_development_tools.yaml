@@ -1,33 +1,50 @@
 ---
-name:           dud_development_tools
-description:    >
-    Same as dud_sdk, but due to bsc#1080292 we cannot use ISO. 
-    FTP url is used instead. Limitation is that we use x86_64 url, 
-    as cannot create DUD in the runtime, so test cannot be executed on other architectures.
+name: dud_development_tools
+description: >
+  Same as dud_sdk, but due to bsc#1080292 we cannot use ISO.  FTP url is used
+  instead. Limitation is that we use x86_64 url, as cannot create DUD in the
+  runtime, so test cannot be executed on other architectures.
+  Also development tools module requires desktop applications module as a
+  dependency, so DESKTOP is set to gnome.
 vars:
-    DUD: dev_tools.dud
-    DUD_ADDONS: sdk
+  DUD_ADDONS: sdk
+  DESKTOP: gnome
+  SCC_ADDONS: base,serverapp,desktop
+  YUI_REST_API: 1
 schedule:
-    - installation/isosize
-    - installation/bootloader_start
-    - installation/welcome
-    - installation/accept_license
-    - installation/scc_registration
-    - installation/dud_addon
-    - installation/addon_products_sle
-    - installation/system_role
-    - installation/partitioning
-    - installation/partitioning_finish
-    - installation/installer_timezone
-    - installation/hostname_inst
-    - installation/user_settings
-    - installation/user_settings_root
-    - installation/resolve_dependency_issues
-    - installation/installation_overview
-    - installation/disable_grub_timeout
-    - installation/start_install
-    - installation/await_install
-    - installation/logs_from_installation_system
-    - installation/reboot_after_installation
-    - installation/grub_test
-    - installation/first_boot
+  - installation/isosize
+  - installation/bootloader_start
+  - installation/setup_libyui
+  - installation/product_selection/select_product
+  - installation/licensing/accept_license
+  - installation/scc_registration
+  - installation/dud_addon
+  - installation/addon_products_sle
+  - installation/system_role
+  - installation/partitioning
+  - installation/partitioning_finish
+  - installation/installer_timezone
+  - installation/hostname_inst
+  - installation/authentication/use_same_password_for_root
+  - installation/authentication/default_user_simple_pwd
+  - installation/resolve_dependency_issues
+  - installation/installation_overview
+  - installation/disable_grub_timeout
+  - installation/start_install
+  - installation/await_install
+  - installation/logs_from_installation_system
+  - installation/reboot_after_installation
+  - installation/grub_test
+  - installation/first_boot
+  - console/hostname
+  - console/system_prepare
+  - console/force_scheduled_tasks
+  - console/validate_dud_addon_repos
+  - console/orphaned_packages_check
+test_data:
+  product: SLES
+  dud_repos:
+    # repos here should correspond with repos in 'data/add_on_products.xml'
+    REPO_SLE_MODULE_DEVELOPMENT_TOOLS:
+      Enabled: 'Yes'
+      Autorefresh: 'On'

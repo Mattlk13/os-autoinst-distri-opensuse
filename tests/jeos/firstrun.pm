@@ -8,20 +8,17 @@
 # without any warranty.
 
 # Summary: Configure JeOS
-# Maintainer: Ciprian Cret <mnowak@suse.com>
+# Maintainer: qa-c team <qa-c@suse.de>
 
 use base "opensusebasetest";
 use strict;
 use warnings;
 use testapi;
-use version_utils qw(is_sle is_tumbleweed is_leap);
-use Utils::Architectures 'is_aarch64';
+use version_utils qw(is_sle is_tumbleweed is_leap is_opensuse);
+use Utils::Architectures qw(is_aarch64 is_x86_64);
 use Utils::Backends 'is_hyperv';
+use jeos qw(expect_mount_by_uuid);
 use utils qw(assert_screen_with_soft_timeout ensure_serialdev_permissions);
-
-sub expect_mount_by_uuid {
-    return (is_hyperv || is_sle('>=15-sp2') || is_tumbleweed || is_leap('>=15.2'));
-}
 
 sub post_fail_hook {
     assert_script_run('timedatectl');
@@ -67,23 +64,31 @@ sub verify_mounts {
 
 sub run {
     my ($self) = @_;
-
     my $lang = is_sle('15+') ? 'en_US' : get_var('JEOSINSTLANG', 'en_US');
-
-    my %keylayout_key = ('en_US' => 'e', 'de_DE' => 'd');
     # For 'en_US' pick 'en_US', for 'de_DE' select 'de_DE'
     my %locale_key = ('en_US' => 'e', 'de_DE' => 'd');
+    # For 'en_US' pick 'us', for 'de_DE' select 'de'
+    my %keylayout_key = ('en_US' => 'u', 'de_DE' => 'd');
     # For 'en_US' pick 'UTC', for 'de_DE' select 'Europe/Berlin'
     my %tz_key = ('en_US' => 'u', 'de_DE' => 'e');
 
-    # Select locale
-    assert_screen 'jeos-locale', 300;
-    # Without this 'ret' sometimes won't get to the dialog
-    wait_still_screen;
-    send_key_until_needlematch "jeos-system-locale-$lang", $locale_key{$lang}, 50;
-    send_key 'ret';
+    # JeOS on generalhw
+    mouse_hide;
+    # kiwi-templates-JeOS images (sle, opensuse x86_64 only) are build w/o translations
+    # jeos-firstboot >= 0.0+git20200827.e920a15 locale warning dialog has been removed
+    if (is_sle('<15-sp3') || (is_leap('<15.3') && is_x86_64)) {
+        assert_screen 'jeos-lang-notice', 300;
+        # Without this 'ret' sometimes won't get to the dialog
+        wait_still_screen;
+        send_key 'ret';
+    } elsif (is_opensuse && !is_x86_64) {
+        assert_screen 'jeos-locale', 300;
+        send_key_until_needlematch "jeos-system-locale-$lang", $locale_key{$lang}, 50;
+        send_key 'ret';
+    }
 
-    # Select language
+    # Select keyboard layout
+    assert_screen 'jeos-keylayout', 300;
     send_key_until_needlematch "jeos-keylayout-$lang", $keylayout_key{$lang}, 30;
     send_key 'ret';
 
@@ -136,7 +141,7 @@ sub run {
     if ($lang ne 'en_US') {
         # With the foreign keyboard, type 'loadkeys us'
         my %loadkeys_reset = ('de_DE' => 'loadkezs us');
-        type_string("$loadkeys_reset{$lang}\n");
+        enter_cmd("$loadkeys_reset{$lang}");
         wait_still_screen;
     }
     # Manually configure root-console as we skipped some parts in root-console's activation
@@ -151,8 +156,10 @@ sub run {
 
     ensure_serialdev_permissions;
 
-    select_console 'user-console';
+    my $console = select_console 'user-console';
     verify_user_info;
+    enter_cmd "exit";
+    $console->reset();
 
     select_console 'root-console';
     if ($lang ne 'en_US') {

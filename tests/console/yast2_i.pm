@@ -1,13 +1,14 @@
 # SUSE's openQA tests
 #
 # Copyright © 2009-2013 Bernhard M. Wiedemann
-# Copyright © 2012-2019 SUSE LLC
+# Copyright © 2012-2020 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: yast2-packager
 # Summary: Install packages using yast2.
 # - Remove package from "$PACKAGETOINSTALL_RECOMMENDED" or yast2-nfs-client and nfs-client
 # - Install yast2-packager
@@ -20,7 +21,7 @@
 # "nfs-client"
 # - Disable "recommended packages" and accept install of test package
 # - Remove test package
-# Maintainer: Martin Kravec <mkravec@suse.com>
+# Maintainer: QA SLE YaST team <qa-sle-yast@suse.de>
 
 use base "y2_module_consoletest";
 use strict;
@@ -70,7 +71,7 @@ sub run {
             record_info("Required", "$1");
         }
     }
-    my $module_name = y2_module_consoletest::yast2_console_exec(yast2_module => 'sw_single');
+    my $module_name = y2_module_consoletest::yast2_console_exec(yast2_module => 'sw_single', yast2_opts => '--ncurses');
     assert_screen [qw(empty-yast2-sw_single yast2-preselected-driver)], 120;
 
     # we need to change filter to Search, in case yast2 reports available automatic update
@@ -112,7 +113,7 @@ sub run {
     # Testcase according to https://fate.suse.com/318099
     # UC1:
     # Select a certain package, check that another gets selected/installed
-    type_string("$pkgname\n");
+    enter_cmd("$pkgname");
     assert_screen "$pkgname-selected";
     wait_still_screen 3;
     send_key "+";    # select for install
@@ -121,7 +122,7 @@ sub run {
     if (!check_var('VERSION', '12')) {    #this functionality isn't avivable in SLE12SP0
         send_key "alt-p";                 # go to search box again
         for (1 .. length($pkgname)) { send_key "backspace" }
-        type_string("$recommended\n");
+        enter_cmd("$recommended");
         assert_screen "$recommended-selected-for-install", 10;
 
         # UC2b:
@@ -135,7 +136,7 @@ sub run {
         assert_screen "$recommended-not-selected-for-install", 5;
         send_key "alt-p";    # go to search box again
         for (1 .. length($recommended)) { send_key "backspace" }
-        type_string("$pkgname\n");
+        enter_cmd("$pkgname");
         assert_screen "$pkgname-selected-for-install", 10;
     }
     send_key "alt-a";        # accept

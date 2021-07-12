@@ -1,7 +1,7 @@
 # SUSE's openQA tests
 #
 # Copyright © 2009-2013 Bernhard M. Wiedemann
-# Copyright © 2012-2018 SUSE LLC
+# Copyright © 2012-2021 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -11,17 +11,17 @@
 # Summary: Ensure the ssh daemon is running
 # - Check if sshd is started
 # - Check if sshd is running
-# Maintainer: Oliver Kurz <okurz@suse.de>
+# Maintainer: QE Core <qe-core@suse.de>
 
 use base "consoletest";
 use strict;
 use warnings;
 use testapi;
 use utils;
+use services::sshd;
 
 sub run {
-    systemctl 'show -p ActiveState sshd|grep ActiveState=active';
-    systemctl 'show -p SubState sshd|grep SubState=running';
+    services::sshd::check_sshd_service();
 }
 
 1;

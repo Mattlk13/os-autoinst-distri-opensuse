@@ -1,12 +1,13 @@
 # SUSE's openQA tests
 #
-# Copyright © 2012-2018 SUSE LLC
+# Copyright © 2012-2021 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: snapper btrfsprogs
 # Summary: Snapper cleanup test based on FATE#312751
 # - In case of upgrade or BOOT_TO_SNAPSHOT not set
 #   - Run snapper setup-quota
@@ -18,7 +19,7 @@
 #   SPACE_LIMIT
 # - Run snapper at least couple of times to ensure it cleans up properly
 # - Cleanup
-# Maintainer: Rodion Iafarov <riafarov@suse.com>
+# Maintainer: QE YaST <qa-sle-yast@suse.de>
 
 use base 'btrfs_test';
 use strict;
@@ -47,11 +48,12 @@ sub snapper_cleanup {
     assert_script_run "btrfs filesystem show --mbytes /";
 
     for (1 .. $scratch_size_gb) { assert_script_run("$snap_create", 500); }
+    assert_script_run('sync');
     script_run "echo There are `$snaps_numb` snapshots BEFORE cleanup";
     assert_script_run("snapper cleanup number",  300);    # cleanup created snapshots
     assert_script_run("btrfs quota rescan -w /", 90);
     script_run "echo There are `$snaps_numb` snapshots AFTER cleanup";
-    assert_script_run("btrfs qgroup show -pcre /", 3);
+    assert_script_run("btrfs qgroup show -pcre /");
     assert_script_run("snapper list");
     clear_console;
     script_run($btrfs_fs_usage);
@@ -70,7 +72,8 @@ sub snapper_cleanup {
 }
 
 sub run {
-    select_console 'root-console';
+    my $self = shift;
+    $self->select_serial_terminal;
 
     if (get_var("UPGRADE") || get_var("AUTOUPGRADE") && !get_var("BOOT_TO_SNAPSHOT")) {
         assert_script_run "snapper setup-quota";
@@ -121,7 +124,7 @@ sub run {
         die("Insufficient initial disk space left on / to run this test: $initially_free bytes");
     }
     assert_script_run("snapper get-config");    # report customized cfg
-    assert_script_run("btrfs qgroup show -pc /", 3);
+    assert_script_run("btrfs qgroup show -pc /");
     # Exclusive disk space of qgroup should be ~50% of the fs space as set with SPACE_LIMIT
     $exp_excl_space = get_space("$btrfs_fs_usage | sed -n '2p' | awk -F ' ' '{print\$3}'") / 2;
     # We need to run snapper at least couple of times to ensure it cleans up properly

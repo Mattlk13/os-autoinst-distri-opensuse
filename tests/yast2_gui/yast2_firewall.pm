@@ -1,16 +1,17 @@
 # SUSE's openQA tests
 #
 # Copyright © 2009-2013 Bernhard M. Wiedemann
-# Copyright © 2012-2019 SUSE LLC
+# Copyright © 2012-2021 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: yast2-firewall yast2-http-server apache2 apache2-prefork firewalld
 # Summary: YaST2 Firewall UI test checks verious configurations and settings of firewall
 # Make sure yast2 firewall can opened properly. Configurations can be changed and written correctly.
-# Maintainer: Joaquín Rivera <jeriveramoya@suse.com>
+# Maintainer: QE YaST <qa-sle-yast@suse.de>
 
 use base "y2_module_guitest";
 use strict;
@@ -73,11 +74,10 @@ sub susefirewall2 {
 }
 
 sub verify_service_stopped {
-    my $self = shift;
 
     record_info('Start-Up', "Managing the firewalld service: Stop");
     select_console 'x11', await_console => 0;
-    $self->launch_yast2_module_x11('firewall', target_match => 'firewall-start-page');
+    y2_module_guitest::launch_yast2_module_x11('firewall', target_match => 'firewall-start-page');
     assert_screen 'yast2_firewall_start-up';
     change_service_configuration(after_writing => {stop => 'alt-t'});
     wait_screen_change { send_key $cmd{accept} };
@@ -88,11 +88,10 @@ sub verify_service_stopped {
 }
 
 sub verify_service_started {
-    my $self = shift;
 
     record_info('Start-Up', "Managing the firewalld service: Start");
     select_console 'x11', await_console => 0;
-    $self->launch_yast2_module_x11('firewall', target_match => 'firewall-start-page');
+    y2_module_guitest::launch_yast2_module_x11('firewall', target_match => 'firewall-start-page');
     assert_screen 'yast2_firewall_start-up';
     change_service_configuration(after_writing => {start => 'alt-t'});
     wait_screen_change { send_key $cmd{accept} };
@@ -117,16 +116,17 @@ sub change_interface_zone {
     send_key $fw{interfaces_change_zone};
     assert_screen 'yast2_firewall_interfaces_change_zone';
     send_key $fw{interfaces_change_zone_zone};
-    type_string "$zone\n";
+    enter_cmd "$zone";
 }
 
 sub verify_zone {
     my (%args) = @_;
 
-    my $interfaces = $args{interfaces} //= 'no_interfaces';
-    my $default    = $args{default}    //= 'no_default';
+    my $interfaces    = $args{interfaces}    //= 'no_interfaces';
+    my $default       = $args{default}       //= 'no_default';
+    my $menu_selected = $args{menu_selected} //= 0;
 
-    assert_and_click 'yast2_firewall_zones';
+    assert_and_click 'yast2_firewall_zones' unless $menu_selected;
     assert_screen 'yast2_firewall_' . $args{name} . '_' . $interfaces . '_' . $default;
 }
 
@@ -157,18 +157,17 @@ sub configure_zone {
 }
 
 sub configure_firewalld {
-    my $self = shift;
 
     record_info('Interface/Zones ', "Verify zone info changing default zone when interface assigned to default zone");
     my $iface = iface;
 
     select_console 'x11', await_console => 0;
-    $self->launch_yast2_module_x11('firewall', target_match => 'firewall-start-page');
+    y2_module_guitest::launch_yast2_module_x11('firewall', target_match => 'firewall-start-page');
 
     verify_interface(device => $iface, zone => 'default');
     verify_zone(name => 'public', interfaces => $iface, default => 'default');
     set_default_zone 'trusted';
-    verify_zone(name => 'trusted', interfaces => $iface, default => 'default');
+    verify_zone(name => 'trusted', interfaces => $iface, default => 'default', menu_selected => 1);
 
     record_info('Interface/Zones', "Verify zone info assigning interface to different zone");
     change_interface_zone 'public';
@@ -192,13 +191,12 @@ sub verify_firewalld_configuration {
 }
 
 sub run {
-    my $self = shift;
     select_console 'x11';
 
     if (is_sle('15+') || is_leap('15.0+') || is_tumbleweed) {
-        $self->verify_service_stopped;
-        $self->verify_service_started;
-        $self->configure_firewalld;
+        verify_service_stopped;
+        verify_service_started;
+        configure_firewalld;
         verify_firewalld_configuration;
         select_console 'x11', await_console => 0;
     }
@@ -206,7 +204,7 @@ sub run {
         select_console 'root-console';
         zypper_call('in yast2-http-server apache2 apache2-prefork', timeout => 1200);
         select_console 'x11', await_console => 0;
-        $self->launch_yast2_module_x11('firewall', match_timeout => 60);
+        y2_module_guitest::launch_yast2_module_x11('firewall', match_timeout => 60);
         susefirewall2;
     }
 }

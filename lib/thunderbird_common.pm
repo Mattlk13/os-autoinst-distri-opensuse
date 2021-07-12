@@ -8,7 +8,9 @@
 # without any warranty.
 
 # Summary: send an email using SMTP and receive it using IMAP
+#          added multimachine server using SSL.
 # Maintainer: Paolo Stivanin <pstivanin@suse.com>
+#       Multimachine: Marcelo Martins <mmartins@suse.com>
 
 package thunderbird_common;
 
@@ -17,7 +19,7 @@ use warnings;
 use base "x11test";
 use testapi;
 use utils;
-use version_utils 'is_sle';
+use version_utils qw(is_sle is_tumbleweed);
 
 use base "Exporter";
 use Exporter;
@@ -25,15 +27,13 @@ use Exporter;
 our @EXPORT = qw(tb_setup_account tb_send_message tb_check_email);
 
 =head2 tb_setup_account
-
  tb_setup_account($proto, $account);
-
 Create an email account in Thunderbird.
 C<$proto> can be C<pop> or C<imap>.
-C<$account> can be C<internal_account_A> or C<internal_account_B>.
-
+C<$account> can be C<internal_account_A> or C<internal_account_B> or C<internal_account_C> or C<internal_account_D>.
 =cut
 sub tb_setup_account {
+    my $hostname = get_var('HOSTNAME');
     my ($self, $proto, $account) = @_;
 
     my $config          = $self->getconfig_emailaccount;
@@ -57,39 +57,61 @@ sub tb_setup_account {
 
     if ($proto eq 'pop') {
         assert_and_click 'thunderbird_wizard-imap-selected';
-        assert_screen 'thunderbird_wizard-imap-pop-open';
-        send_key 'down';
-        send_key 'ret';
+        assert_and_click 'thunderbird_wizard-imap-pop-open';
+        if (is_tumbleweed) {
+            assert_and_click 'thunderbird_SSL_pop3-selection-click-TW';
+            assert_and_click 'thunderbird_SSL_auth_click';
+            assert_and_click 'thunderbird_wizard-pop-done';
+        }
+        else {
+            # If use multimachine, select correct needles to configure thunderbird.
+            if ($hostname eq 'client') {
+                assert_and_click 'thunderbird_SSL_auth_click';
+                wait_still_screen(2);
+                send_key 'down';
+                send_key 'ret';
+            }
+            assert_screen "thunderbird_wizard-$proto-selected";
+        }
     }
-    assert_screen "thunderbird_wizard-$proto-selected";
 
-    assert_and_click 'thunderbird_startssl-selected-for-imap';
-    assert_and_click 'thunderbird_security-select-none';
-    assert_and_click 'thunderbird_startssl-selected-for-smtp';
-    assert_and_click 'thunderbird_security-select-none';
-    assert_and_click 'thunderbird_wizard-retest';
-    assert_and_click 'thunderbird_wizard-done';
-    assert_and_click 'thunderbird_I-understand-the-risks';
-    assert_and_click 'thunderbird_risks-done';
+    # If use multimachine, select correct needles to configure thunderbird.
+    if ($hostname eq 'client') {
+        send_key_until_needlematch 'thunderbird_SSL_done_config', 'alt-t', 4, 2;
+        wait_still_screen(2);
+        assert_and_click "thunderbird_SSL_done_config";
+        wait_still_screen(3);
+        assert_and_click 'thunderbird_SSL_done_config' unless check_screen('thunderbird_confirm_security_exception');
+        assert_and_click "thunderbird_confirm_security_exception";
+        assert_and_click "thunderbird_skip-system-integration";
+        assert_and_click "thunderbird_get-messages";
+    }
+    else {
+        assert_and_click 'thunderbird_startssl-selected-for-imap';
+        assert_and_click 'thunderbird_security-select-none';
+        assert_and_click 'thunderbird_startssl-selected-for-smtp';
+        assert_and_click 'thunderbird_security-select-none';
+        assert_and_click 'thunderbird_wizard-retest';
+        assert_and_click 'thunderbird_wizard-done';
+        assert_and_click 'thunderbird_I-understand-the-risks';
+        assert_and_click 'thunderbird_risks-done';
+        # skip additional integrations
+        assert_and_click "thunderbird_skip-system-integration";
+        assert_and_click "thunderbird_get-messages";
+    }
 
-    # skip additional integrations
-    assert_and_click "thunderbird_skip-system-integration";
-
-    assert_and_click "thunderbird_get-messages";
 }
 
 =head2 tb_send_message
-
  tb_send_message($account);
-
 Test sending an email using Thunderbird.
-C<$account> can be C<internal_account_A> or C<internal_account_B>.
+C<$proto> can be C<pop> or C<imap>.
+C<$account> can be C<internal_account_A> or C<internal_account_B> or C<internal_account_C> or C<internal_account_D>.
 Returns email subject.
-
 =cut
 sub tb_send_message {
-    my ($self, $account) = @_;
-
+    my $hostname = get_var('HOSTNAME');
+    my ($self, $proto, $account) = @_;
     my $config       = $self->getconfig_emailaccount;
     my $mailbox      = $config->{$account}->{mailbox};
     my $mail_passwd  = $config->{$account}->{passwd};
@@ -104,22 +126,34 @@ sub tb_send_message {
 
     send_key "tab";
     type_string "Test email send and receive.";
-    send_key "ctrl-ret";
-    # we can't use "ret" because it doesn't always work
-    assert_and_click "thunderbird_really-send-message";
+    assert_and_click "thunderbird_send-message";
+    wait_still_screen(2);
 
-    assert_screen 'thunderbird_sent-folder-appeared';
+    if ($hostname eq 'client') {
+        if (check_var('SLE_PRODUCT', 'sled')) {
+            assert_and_click "thunderbird_SSL_error_security_exception";
+            assert_and_click "thunderbird_confirm_security_exception";
+            assert_and_click 'thunderbird_maximized_send-message';
+        }
+        else {
+            assert_and_click "thunderbird_SSL_error_security_exception";
+            assert_and_click "thunderbird_confirm_security_exception";
+            assert_and_click 'thunderbird_maximized_send-message';
+            assert_and_click "thunderbird_get-messages";
+        }
+
+    }
+    else {
+        assert_screen 'thunderbird_sent-folder-appeared', 90;
+    }
 
     return $mail_subject;
 }
 
 =head2 tb_check_email
-
  tb_check_email($mail_search);
-
 Check for new emails.
 C<$mail_search> may be an email subject to search for.
-
 =cut
 sub tb_check_email {
     my ($self, $mail_search) = @_;
@@ -127,7 +161,7 @@ sub tb_check_email {
     wait_screen_change { send_key "shift-f5" };
     send_key "ctrl-shift-k";
     wait_screen_change { type_string "$mail_search" };
-    assert_screen "thunderbird_sent-message-received";
+    send_key_until_needlematch "thunderbird_sent-message-received", 'shift-f5', 4, 30;
 
     # delete the message
     assert_and_click "thunderbird_select-message";

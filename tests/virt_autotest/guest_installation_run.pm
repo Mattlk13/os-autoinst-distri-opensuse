@@ -34,6 +34,7 @@ sub get_script_run {
     handle_sp_in_settings_with_fcs("GUEST_PATTERN");
     my $guest_pattern = get_var('GUEST_PATTERN', 'sles-12-sp2-64-[p|f]v-def-net');
     my $parallel_num  = get_var("PARALLEL_NUM",  "2");
+
     $pre_test_cmd = $pre_test_cmd . " -f " . $guest_pattern . " -n " . $parallel_num . " -r ";
 
     return $pre_test_cmd;
@@ -53,13 +54,23 @@ sub analyzeResult {
     return $result;
 }
 
+sub post_execute_script_assertion {
+    my $self   = shift;
+    my $output = $self->{script_output};
+
+    $output =~ s/"|'|`//g;
+    my $guest_installation_assert_pattern = "Test[[:space:]]in[[:space:]]progress.*(fail|timeout).*Test[[:space:]]run[[:space:]]complete";
+    script_output("shopt -s nocasematch;[[ ! \"$output\" =~ $guest_installation_assert_pattern ]]", type_command => 0, proceed_on_failure => 0);
+    save_screenshot;
+}
+
 sub run {
     my $self = shift;
 
     # Add option to keep guest after successful installation
     # Only for x86_64 now
     if (check_var('ARCH', 'x86_64')) {
-        assert_script_run("sed -i 's/vm-install.sh/vm-install\.sh -g /' /usr/share/qa/qa_test_virtualization/installos");
+        assert_script_run("sed -i 's/vm-install.sh/vm-install\.sh -g -k /' /usr/share/qa/qa_test_virtualization/installos");
         assert_script_run("sed -i 's/virt-install.sh/virt-install\.sh -u /' /usr/share/qa/qa_test_virtualization/virt_installos");
         assert_script_run('cat /usr/share/qa/qa_test_virtualization/installos | grep vm-install');
         save_screenshot;

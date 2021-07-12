@@ -7,6 +7,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: yast2-network
 # Summary: yast2 lan hostname via DHCP test https://bugzilla.suse.com/show_bug.cgi?id=984890
 # Maintainer: Jozef Pupava <jpupava@suse.com>
 
@@ -46,7 +47,7 @@ sub hostname_via_dhcp {
 
     wait_screen_change { send_key 'down'; };    # open roll-down list
     send_key $cmd{home};
-    assert_screen("yast2_lan-hostname-DHCP-no");    # check that topmost option is selected
+    assert_screen("yast2_lan-hostname-DHCP-no");               # check that topmost option is selected
     send_key_until_needlematch "yast2_lan-hostname-DHCP-$dhcp", 'down';
     wait_screen_change { send_key $cmd{spc}; };
     assert_screen "yast2_lan-hostname-DHCP-$dhcp-selected";    # make sure that the option is actually selected

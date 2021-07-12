@@ -15,6 +15,7 @@ use warnings;
 use base "opensusebasetest";
 use testapi;
 use utils 'zypper_call';
+use version_utils 'is_leap';
 
 sub run {
     my ($self) = @_;
@@ -31,21 +32,23 @@ sub run {
 
         # Handle default credentials for ssh login
         $testapi::password = $default_password;
-        $self->select_serial_terminal;
+        # 'root-ssh' console will wait for SUT to be reachable from ssh
+        select_console('root-ssh');
     }
     else {
         # Login with default credentials (root:linux)
         assert_screen('linux-login', 300);
-        type_string("root\n",              wait_still_screen => 5);
-        type_string("$default_password\n", wait_still_screen => 5);
+        enter_cmd("root",              wait_still_screen => 5);
+        enter_cmd("$default_password", wait_still_screen => 5);
     }
 
-    # Install and enable jeos-firstboot
-    zypper_call('in jeos-firstboot');
+    # Install jeos-firstboot, when needed
+    zypper_call('in jeos-firstboot') if is_leap;
 
     if ($is_generalhw_via_ssh) {
-        # Do not set eth0 down as we are connected through ssh!
-        assert_script_run("sed -i 's/ip link set down \"\$d\" #/if [ \"eth0\" != \"\$d\" ]; then ip link set down \"\$d\"; fi; #/' /usr/lib/jeos-firstboot");
+        # Do not set network down as we are connected through ssh!
+        my $filetoedit = is_leap('<=15.2') ? '/usr/lib/jeos-firstboot' : '/usr/share/jeos-firstboot/jeos-firstboot-dialogs';
+        assert_script_run("sed -i 's/ip link set down /# ip link set down/g' $filetoedit");
     }
     # Remove current root password
     assert_script_run("sed -i 's/^root:[^:]*:/root:*:/' /etc/shadow", 600);
@@ -54,18 +57,20 @@ sub run {
     $testapi::password = $distripassword;
 
     if ($reboot_for_jeos_firstboot) {
-        # Ensure YaST2-Firstboot is disabled, as we use jeos-firstboot in openQA
-        assert_script_run("systemctl disable YaST2-Firstboot");
+        # Ensure YaST2-Firstboot is disabled, and enable jeos-firstboot in openQA
+        assert_script_run("systemctl disable YaST2-Firstboot") if is_leap('<15.2');
         assert_script_run("systemctl enable jeos-firstboot");
 
+        # When YaST2-Firstboot is not installed, /var/lib/YaST2 does not exist, so create it
+        assert_script_run("mkdir -p /var/lib/YaST2") if !is_leap('<15.2');
+        # Trigger *-firstboot at next boot
         assert_script_run("touch /var/lib/YaST2/reconfig_system");
 
-        type_string("reboot\n");
+        enter_cmd("reboot");
     }
     else {
-        type_string("/usr/lib/jeos-firstboot\n");
+        enter_cmd(is_leap('<=15.2') ? "/usr/lib/jeos-firstboot\n" : "jeos-firstboot");
     }
-
 }
 
 1;

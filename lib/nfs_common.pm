@@ -21,7 +21,7 @@ sub server_configure_network {
     setup_static_mm_network('10.0.2.101/24');
 
     if (is_sle('15+') || is_opensuse) {
-        record_soft_failure 'boo#1130093 No firewalld service for nfs-kernel-server';
+        record_soft_failure 'boo#1083486 No firewalld service for nfs-kernel-server';
         disable_and_stop_service('firewalld');
     }
 }
@@ -154,9 +154,9 @@ sub client_common_tests {
     assert_script_run "rm /tmp/nfs/client/symlinkedfile";
 
     # Copy large file from NFS and test it's checksum
-    assert_script_run "time cp /tmp/nfs/client/random /tmp/", 120;
-    assert_script_run "md5sum /tmp/random | cut -d' ' -f1 > /tmp/random.md5sum";
-    assert_script_run "diff /tmp/nfs/client/random.md5sum /tmp/random.md5sum";
+    assert_script_run "time cp /tmp/nfs/client/random /var/tmp/", 120;
+    assert_script_run "md5sum /var/tmp/random | cut -d' ' -f1 > /var/tmp/random.md5sum";
+    assert_script_run "diff /tmp/nfs/client/random.md5sum /var/tmp/random.md5sum";
 }
 
 sub check_nfs_ready {
@@ -178,7 +178,7 @@ sub check_nfs_ready {
 
 sub yast2_server_initial {
     do {
-        assert_screen([qw(nfs-server-not-installed nfs-firewall nfs-config)]);
+        assert_screen([qw(nfs-server-not-installed nfs-firewall nfs-config)], 120);
         # install missing packages as proposed
         if (match_has_tag('nfs-server-not-installed') or match_has_tag('nfs-firewall')) {
             send_key 'alt-i';
@@ -219,8 +219,11 @@ sub config_service {
     send_key 'alt-s';
 
     # Disable NFSv4
-    send_key 'alt-v';
-    wait_still_screen 1;
+    assert_screen([qw(nfsv4-disabled nfsv4-enabled)], 120);
+    if (match_has_tag('nfsv4-enabled')) {
+        send_key 'alt-v';
+        wait_still_screen 1;
+    }
 
     yast_handle_firewall();
 
@@ -241,7 +244,7 @@ sub start_service {
     clear_console;
 
     # Server is up and running, client can use it now!
-    script_run "( journalctl -fu nfs-server > /dev/$serialdev & )";
+    script_run "( journalctl -fu nfs-server -o short-precise > /dev/$serialdev & )";
     check_nfs_ready($rw, $ro);
 }
 
@@ -263,16 +266,20 @@ sub check_service {
 }
 
 sub check_y2_nfs_func {
-    my ($stage) = @_;
-    $stage //= '';
+    my (%hash) = @_;
+    my $stage = $hash{stage};
     if ($stage eq 'before') {
         install_service();
         config_service($rw, $ro);
         start_service($rw, $ro);
     }
     check_service($rw, $ro);
-    if ($stage eq 'before') {
-        stop_service();
+    stop_service();
+    # we need to cleanup the nfs settings after service check was done.
+    if ($stage eq 'after') {
+        zypper_call 'rm yast2-nfs-server nfs-kernel-server', timeout => 480;
+        script_run ':> /etc/exports';
+        script_run 'rm -fr /srv/*';
     }
 }
 

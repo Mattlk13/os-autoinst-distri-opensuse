@@ -7,6 +7,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: nfs-client yast2-instserver lftp xinetd vsftpd openslp-server yast2-nfs-server nfs-client apache2
 # Summary: test yast2-instserver using HTTP, FTP and NFS
 # - ensure that all needed packages are installed
 # - setup instserver using HTTP
@@ -56,7 +57,7 @@ sub test_nfs_instserver {
     assert_screen('yast2-instserver-nfs');
     # use default nfs config
     send_key_and_wait("alt-n", 2);
-    assert_screen('yast2-instserver-ui');
+    assert_screen('yast2-instserver-ui', 200);
     # finish wizard
     send_key_and_wait("alt-f", 3);
     # check that the nfs instserver is working
@@ -124,13 +125,19 @@ sub test_http_instserver {
     send_key_until_needlematch("yast2-instserver_sr0dev", "down", 3);
     send_key_and_wait("alt-n", 2);
     send_key_and_wait("alt-o", 2);
-    assert_screen([qw(yast2-instserver-ui yast2-instserver-change-media)], 200);
+    assert_screen([qw(yast2-instserver-ui yast2-instserver-change-media)], 300);
     # skip "insert next cd" on SLE 12.x
     send_key_and_wait("alt-s", 2) if is_sle("<=12-SP5") && match_has_tag('yast2-instserver-change-media');
     assert_screen('yast2-instserver-ui');
     # finish wizard
     send_key_and_wait("alt-f", 3);
     # check that the http instserver is working
+    if (is_sle("15-sp3+")) {
+        select_console "root-console";
+        zypper_call 'rm --clean-deps apache2';
+        zypper_call 'in apache2';
+        assert_script_run("systemctl start apache2");
+    }
     x11_start_program "xterm";
     wait_still_screen 2, 2;
     validate_script_output("curl -s http://localhost/test/instserver/CD1/ | grep title", sub { m/.*Index of \/test\/instserver\/CD1.*/ });
@@ -139,8 +146,7 @@ sub test_http_instserver {
 }
 
 sub start_yast2_instserver {
-    my $self = shift;
-    $self->launch_yast2_module_x11("instserver", match_timeout => 120);
+    y2_module_guitest::launch_yast2_module_x11("instserver", match_timeout => 120);
     wait_still_screen;
 }
 
@@ -152,19 +158,19 @@ sub run {
 
     select_console "x11";
 
-    start_yast2_instserver $self;
+    start_yast2_instserver;
     test_http_instserver;
 
-    start_yast2_instserver $self;
+    start_yast2_instserver;
     test_ftp_instserver;
 
-    start_yast2_instserver $self;
+    start_yast2_instserver;
     test_nfs_instserver;
 
     # clean existing config
-    start_yast2_instserver $self;
+    start_yast2_instserver;
     clean_env;
-}
 
+}
 1;
 

@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright © 2020 SUSE LLC
+# Copyright © 2020-2021 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -12,9 +12,9 @@
 # - Get profile from autoyast template
 # - Map version names
 # - Get IP address from system variables
-# - Get values from SCC_REGCODE SCC_REGCODE_HA SCC_REGCODE_GEO SCC_URL ARCH LOADER_TYPE
+# - Get values from SCC_REGCODE SCC_REGCODE_HA SCC_REGCODE_GEO SCC_REGCODE_HPC SCC_URL ARCH LOADER_TYPE
 # - Modify profile with obtained values and upload new autoyast profile
-# Maintainer: Rodion Iafarov <riafarov@suse.com>
+# Maintainer: QE YaST <qa-sle-yast@suse.de>
 
 use strict;
 use warnings;
@@ -39,7 +39,7 @@ sub run {
 
     # if profile is a template, expand and rename
     $profile = expand_template($profile) if $path =~ s/^(.*\.xml)\.ep$/$1/;
-    die $profile if $profile->isa('Mojo::Exception');
+    die $profile                         if $profile->isa('Mojo::Exception');
 
     $profile = expand_version($profile);
     $profile = adjust_network_conf($profile);

@@ -7,6 +7,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: util-linux lvm2 yast2-iscsi-lio-server targetcli python3-targetcli-fb
 # Summary: Test suite for iSCSI server and client
 #    Multimachine testsuites, server test creates iscsi target and client test uses it
 # - Open xterm, configure server network and create drive for iscsi
@@ -154,12 +155,12 @@ sub config_2way_authentication {
 }
 
 sub target_backstore_tab {
-    send_key 'alt-t';    # go to target tab
+    send_key 'alt-t';     # go to target tab
     assert_screen 'iscsi-target-targets-tab';
-    send_key 'alt-a';    # add target
-                         # we need to wait while YaST generates Identifier value
+    send_key 'alt-a';     # add target
+                          # we need to wait while YaST generates Identifier value
     wait_still_screen(stilltime => 1, timeout => 5, similarity_level => 44);
-    send_key 'alt-t';    # select target field
+    send_key 'alt-t';     # select target field
     wait_still_screen(stilltime => 1, timeout => 5, similarity_level => 44);
     send_key 'ctrl-a';    # select all text inside target field
     wait_still_screen(stilltime => 1, timeout => 5, similarity_level => 45);
@@ -183,9 +184,9 @@ sub target_backstore_tab {
     assert_and_click('iscsi-target-LUN-path-selected', timeout => 20);
     type_string_slow_extended $test_data->{target_conf}->{backstore};
     assert_screen 'iscsi-target-LUN';
-    send_key 'alt-o';    # OK
+    send_key 'alt-o';               # OK
     assert_screen 'iscsi-target-overview';
-    send_key 'alt-n';    # next
+    send_key 'alt-n';               # next
     config_2way_authentication;
     assert_screen 'iscsi-target-overview-target-tab';
     send_key 'alt-f';               # finish
@@ -197,7 +198,7 @@ sub display_targets {
     my $cmd = 'targetcli sessions list | tee -a ' . "/dev/$serialdev";
     assert_script_run 'targetcli ls';
     # targetcli does not support sessions option in sle12
-    return if (is_sle '<15');
+    return                                 if (is_sle '<15');
     $cmd .= '| grep -i ' . $args{expected} if defined($args{expected}) . ' | tee -a ' . "/dev/$serialdev";
     assert_script_run $cmd;
 }
@@ -212,7 +213,7 @@ sub run {
     display_targets(expected => qq('no open sessions'));
     # start yast2 wizard
     record_info 'iSCSI target', 'Start target configuration';
-    my $module_name = $self->launch_yast2_module_x11('iscsi-lio-server', target_match => 'iscsi-lio-server');
+    my $module_name = y2_module_guitest::launch_yast2_module_x11('iscsi-lio-server', target_match => 'iscsi-lio-server');
     target_service_tab;
     target_backstore_tab;
     wait_serial("$module_name-0", 180) || die "'yast2 iscsi-lio-server' didn't finish or exited with non-zero code";
@@ -234,7 +235,7 @@ sub run {
     mutex_create('iscsi_display_sessions');
     # wait idle while initiator finishes its execution
     wait_for_children;
-    type_string "killall xterm\n";
+    enter_cmd "killall xterm";
     # run till client is done
     wait_for_children;
     $self->result('ok');

@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright © 2018 SUSE LLC
+# Copyright © 2018-2020 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -18,6 +18,7 @@ use strict;
 use warnings;
 use testapi;
 use utils;
+use Utils::Backends 'is_pvm';
 
 sub run {
     my ($self) = @_;
@@ -29,11 +30,15 @@ sub run {
 
     # Reboot from Installer media for upgrade
     # Aarch64 need BOOT_HDD_IMAGE=1 to keep the correct flow to boot from disk for x11/reboot_gnome.
+    # but in Aarch64 zdup migration we need to set it to 0, this will make it boot from hard disk.
     if (get_var('UPGRADE') || get_var('AUTOUPGRADE')) {
-        set_var('BOOT_HDD_IMAGE', 0) unless check_var('ARCH', 'aarch64');
+        set_var('BOOT_HDD_IMAGE', 0) unless (check_var('ARCH', 'aarch64') && !check_var('ZDUP', '1'));
     }
     assert_script_run "sync", 300;
-    type_string "reboot -f\n";
+    enter_cmd "reboot";
+
+    # After remove -f for reboot, we need wait more time for boot menu and avoid exception during reboot caused delay to boot up.
+    assert_screen('inst-bootmenu', 300) unless (check_var('ARCH', 's390x') || is_pvm);
 }
 
 1;

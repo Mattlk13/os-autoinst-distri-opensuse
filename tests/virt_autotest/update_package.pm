@@ -17,9 +17,9 @@ use testapi;
 use base "virt_autotest_base";
 use virt_utils;
 use ipmi_backend_utils;
-use Utils::Backends 'is_remote_backend';
 use Utils::Architectures;
 use version_utils 'is_sle';
+use virt_autotest::utils qw(is_xen_host is_kvm_host);
 
 sub update_package {
     my $self           = shift;
@@ -39,10 +39,10 @@ sub update_package {
         upload_asset "/tmp/update_virt_rpms.log", 1, 1;
     }
     else {
-        $ret = $self->execute_script_run($update_pkg_cmd, 7200);
+        $self->execute_script_run($update_pkg_cmd, 7200);
         upload_logs("/tmp/update_virt_rpms.log");
         save_screenshot;
-        if ($ret !~ /Need to reboot system to make the rpms work/m) {
+        if ($self->{script_output} !~ /Need to reboot system to make the rpms work/m) {
             die " Update virt rpms fail, going to terminate following test!";
         }
     }
@@ -51,19 +51,25 @@ sub update_package {
 
 sub run {
     my $self = shift;
-    $self->update_package() unless (is_sle('=15-SP2') && (check_var("HOST_HYPERVISOR", "xen") || check_var("SYSTEM_ROLE", "xen")));
-    if (!check_var('ARCH', 's390x')) {
-        set_serial_console_on_vh('', '', 'xen') if (get_var("XEN")                      || check_var("HOST_HYPERVISOR", "xen"));
-        set_serial_console_on_vh('', '', 'kvm') if (check_var("HOST_HYPERVISOR", "kvm") || check_var("SYSTEM_ROLE",     "kvm"));
+    #workaroud: skip update package for registered aarch64 tests and because there are conflicts on sles15sp2 XEN
+    $self->update_package() unless (is_registered_sles && is_aarch64);
+    unless ((is_registered_sles && is_aarch64) || is_s390x) {
+        set_serial_console_on_vh('', '', 'xen') if is_xen_host;
+        set_serial_console_on_vh('', '', 'kvm') if is_kvm_host;
     }
     update_guest_configurations_with_daily_build();
-    if (is_remote_backend && check_var('ARCH', 'aarch64') && !check_var('LINUX_CONSOLE_OVERRIDE', 'ttyAMA0') && (get_var('VIRT_PRJ2_HOST_UPGRADE') || get_var('VIRT_PRJ4_GUEST_UPGRADE'))) {
-        my $ipmi_console = get_var('LINUX_CONSOLE_OVERRIDE', 'ttyAMA0');
-        assert_script_run("sed -irn \"s/console=ttyAMA0/console=$ipmi_console/g\" /usr/share/qa/virtautolib/lib/vh-update-lib.sh");
-    }
 
     # turn on debug for libvirtd & enable journal with previous reboot
     enable_debug_logging if is_x86_64;
+
+    #workaround of bsc#1177790
+    #disable DNSSEC validation as it is turned on by default but the forwarders donnot support it, refer to bsc#1177790
+    if (is_sle('>=12-sp5')) {
+        script_run "sed -i 's/#dnssec-validation auto;/dnssec-validation no;/g' /etc/named.conf";
+        script_run "grep 'dnssec-validation' /etc/named.conf";
+        script_run "systemctl restart named";
+        save_screenshot;
+    }
 
 }
 

@@ -13,6 +13,7 @@
 # Maintainer: Sebastian Chlad <sebastian.chlad@suse.com>
 
 use base 'hpcbase';
+use base 'hpc::utils';
 use strict;
 use warnings;
 use testapi;
@@ -23,31 +24,27 @@ use version_utils 'is_sle';
 
 sub run {
     my $self          = shift;
-    my $version       = get_required_var('VERSION');
-    my $arch          = get_required_var('ARCH');
-    my $sdk_version   = get_required_var('BUILD_SDK');
-    my $mpi           = get_required_var('MPI');
+    my $mpi           = $self->get_mpi();
     my $mpi_c         = 'simple_mpi.c';
     my @cluster_nodes = $self->cluster_names();
     my $cluster_nodes = join(',', @cluster_nodes);
 
     ## adding required sdk and gcc
-    if (is_sle '<15') {
-        zypper_call("ar -f ftp://openqa.suse.de/SLE-$version-SDK-POOL-$arch-Build$sdk_version-Media1/ SDK");
-        zypper_call("ar -f http://download.suse.de/ibs/SUSE/Products/SLE-Module-Toolchain/12/$arch/product/ SLE-Module-Toolchain12-Pool");
-        zypper_call("ar -f http://download.suse.de/ibs/SUSE/Updates/SLE-Module-Toolchain/12/$arch/update/ SLE-Module-Toolchain12-Updates");
-    } else {
+    if (is_sle '>=15') {
         add_suseconnect_product('sle-module-development-tools');
     }
 
     zypper_call("in $mpi $mpi-devel gcc");
     assert_script_run("export LD_LIBRARY_PATH=\$LD_LIBRARY_PATH:/usr/lib64/mpi/gcc/$mpi/lib64/");
 
+    barrier_wait('CLUSTER_PROVISIONED');
     ## all nodes should be able to ssh to each other, as MPIs requires so
     $self->generate_and_distribute_ssh();
 
     barrier_wait('MPI_SETUP_READY');
     $self->check_nodes_availability();
+
+    record_info('INFO', script_output('cat /proc/cpuinfo'));
 
     assert_script_run("wget --quiet " . data_url("hpc/$mpi_c") . " -O /tmp/$mpi_c");
     assert_script_run("/usr/lib64/mpi/gcc/$mpi/bin/mpicc /tmp/simple_mpi.c -o /tmp/simple_mpi | tee /tmp/make.out");
@@ -71,9 +68,14 @@ sub run {
         assert_script_run("/usr/lib64/mpi/gcc/$mpi/bin/mpirun --allow-run-as-root --host $cluster_nodes  /tmp/simple_mpi");
     } elsif ($mpi eq 'mvapich2') {
         # we do not support ethernet with mvapich2
-        my $return = script_run("/usr/lib64/mpi/gcc/$mpi/bin/mpirun --host $cluster_nodes /tmp/simple_mpi");
+        my $return = script_run("set -o pipefail;/usr/lib64/mpi/gcc/$mpi/bin/mpirun --host $cluster_nodes /tmp/simple_mpi |& tee /tmp/simple_mpi.log");
         if ($return == 143) {
             record_info("echo $return - No IB device found");
+        } elsif ($return == 139 || $return == 255) {
+            # process running (on master return 139, on slave return 255)
+            if (script_run('grep \'Caught error: Segmentation fault (signal 11)\' /tmp/simple_mpi.log') == 0) {
+                record_soft_failure('bsc#1144000 MVAPICH2: segfault while executing without ib_uverbs loaded');
+            }
         } else {
             ##TODO: condider more rebust handling of various errors
             die("echo $return - not expected errorcode");

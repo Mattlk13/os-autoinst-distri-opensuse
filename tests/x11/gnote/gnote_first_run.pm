@@ -8,6 +8,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: gnote
 # Summary: gnote startup
 # - Install gnote if necessary
 # - Launch gnote
@@ -24,7 +25,7 @@ use version_utils 'is_tumbleweed';
 sub run {
     if (is_tumbleweed) {
         select_console('root-console');
-        pkcon_quit;
+        quit_packagekit;
         zypper_call('in gnote');
         select_console('x11');
     }

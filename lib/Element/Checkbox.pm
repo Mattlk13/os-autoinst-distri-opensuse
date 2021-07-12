@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright © 2019 SUSE LLC
+# Copyright © 2019-2021 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -9,7 +9,7 @@
 
 # Summary: The class introduces checkbox as a UI element with its accessing
 # methods.
-# Maintainer: Oleksandr Orlov <oorlov@suse.de>
+# Maintainer: QE YaST <qa-sle-yast@suse.de>
 
 package Element::Checkbox;
 use strict;
@@ -104,9 +104,9 @@ Example:
 
 sub set_state {
     my ($self, %args) = @_;
-    my $state              = $args{state};
-    my $shortcut           = $args{shortcut};
-    my $checked_needle     = $args{checked_needle},
+    my $state          = $args{state};
+    my $shortcut       = $args{shortcut};
+    my $checked_needle = $args{checked_needle},
       my $unchecked_needle = $args{unchecked_needle};
 
     # Check if the checkbox already in the required state. If so, just skip.

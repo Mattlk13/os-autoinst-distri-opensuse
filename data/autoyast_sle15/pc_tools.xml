@@ -19,7 +19,7 @@
     <add-on>
         <add_on_products config:type="list">
             <listentry>
-                <media_url>http://download.suse.de/ibs/Devel:/PubCloud:/CI/SLE_15</media_url>
+                <media_url>https://download.opensuse.org/repositories/Cloud:/Tools:/CI:/15SP2/SLE_15_SP2/</media_url>
                 <product>public_cloud_devel</product>
                 <alias>Public Cloud Devel</alias>
                 <product_dir>/</product_dir>
@@ -27,18 +27,6 @@
                 <ask_on_error config:type="boolean">false</ask_on_error>
                 <confirm_license config:type="boolean">false</confirm_license>
                 <name>Public Cloud Devel</name>
-                <ask_user config:type="boolean">false</ask_user>
-                <selected config:type="boolean">true</selected>
-            </listentry>
-            <listentry>
-                <media_url>https://download.opensuse.org/repositories/devel:/languages:/python:/backports/SLE_15/</media_url>
-                <product>python_devel</product>
-                <alias>Python Devel</alias>
-                <product_dir>/</product_dir>
-                <priority config:type="integer">20</priority>
-                <ask_on_error config:type="boolean">false</ask_on_error>
-                <confirm_license config:type="boolean">false</confirm_license>
-                <name>Python Devel</name>
                 <ask_user config:type="boolean">false</ask_user>
                 <selected config:type="boolean">true</selected>
             </listentry>
@@ -52,22 +40,27 @@
         <addons config:type="list">
             <addon>
                 <name>sle-module-basesystem</name>
-                <version>15</version>
+                <version>{{VERSION}}</version>
                 <arch>x86_64</arch>
             </addon>
             <addon>
                 <name>sle-module-public-cloud</name>
-                <version>15</version>
+                <version>{{VERSION}}</version>
                 <arch>x86_64</arch>
             </addon>
             <addon>
                 <name>sle-module-development-tools</name>
-                <version>15</version>
+                <version>{{VERSION}}</version>
                 <arch>x86_64</arch>
             </addon>
             <addon>
                 <name>sle-module-legacy</name>
-                <version>15</version>
+                <version>{{VERSION}}</version>
+                <arch>x86_64</arch>
+            </addon>
+            <addon>
+                <name>sle-module-containers</name>
+                <version>{{VERSION}}</version>
                 <arch>x86_64</arch>
             </addon>
         </addons>
@@ -99,6 +92,7 @@
             <package>sudo</package>
             <package>wget</package>
             <package>python</package>
+            <package>haveged</package>
         </packages>
     </software>
     <scripts>
@@ -109,10 +103,6 @@
                 <source>
                     <![CDATA[
                         #!/bin/sh
-                        sed -i 's/resume=\/dev\/sda.//' /etc/default/grub
-                        sed -i 's/splash=silent\ quiet//' /etc/default/grub
-                        sed -i '/GRUB_DISABLE_LINUX_UUID/s/^# //' /etc/default/grub
-                        grub2-mkconfig -o /boot/grub2/grub.cfg
                         update-alternatives --install /usr/bin/python python /usr/bin/python2 1
                         update-alternatives --install /usr/bin/python python /usr/bin/python3 2
                         ]]>

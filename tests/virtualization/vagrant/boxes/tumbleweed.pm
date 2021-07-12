@@ -13,6 +13,7 @@
 # You should have received a copy of the GNU General Public License along
 # with this program; if not, see <http://www.gnu.org/licenses/>.
 
+# Package: vagrant vagrant-libvirt ansible
 # Summary: Test for the openSUSE vagrant boxes
 # Maintainer: dancermak <dcermak@suse.com>
 
@@ -25,6 +26,19 @@ use vagrant;
 use File::Basename;
 use Utils::Architectures 'is_x86_64';
 
+sub run_test_per_provider {
+    my ($version, $provider) = @_;
+    my $boxname = "$version-$provider";
+
+    # Test the box *only*: bring it up and destroy it immediately afterwards
+    run_vagrant_cmd("up $boxname --provider $provider", timeout => 1200);
+
+    # test if the box survives a reboot
+    run_vagrant_cmd('halt');
+    run_vagrant_cmd("up $boxname", timeout => 1200);
+
+    run_vagrant_cmd("destroy -f $boxname");
+}
 
 sub run() {
     my $is_virtualbox_applicable = is_x86_64();
@@ -40,11 +54,13 @@ sub run() {
     # version = Tumbleweed, Leap 15 etc
     my $version = get_required_var('VERSION');
     my $arch    = get_required_var('ARCH');
-    my $build   = get_required_var('BUILD');
+    my $arch_ext;
+    $arch_ext = "_$arch" if !is_x86_64();
+    my $build = get_required_var('BUILD');
 
     my %boxes = (
         # Tumbleweed.x86_64-1.0-{libvirt|virtualbox}-Snapshot20190704.vagrant.{libvirt|virtualbox}.box
-        libvirt => "$version.$arch-1.0-libvirt-Snapshot$build.vagrant.libvirt.box",
+        libvirt => "$version.$arch-1.0-libvirt$arch_ext-Snapshot$build.vagrant.libvirt.box",
     );
     # virtualbox is supported only on x86_64
     %boxes = (%boxes, virtualbox => "$version.$arch-1.0-virtualbox-Snapshot$build.vagrant.virtualbox.box") if $is_virtualbox_applicable;
@@ -71,34 +87,24 @@ sub run() {
     assert_script_run("mv Vagrantfile test_dir/");
     assert_script_run("pushd test_dir");
 
-    #
     # Grab the remaining test files and bring the boxes up, down and up again
     # be sure to clean them up afterwards
-    #
-    assert_script_run("wget --quiet " . data_url('virtualization/testfile.txt'));
-    assert_script_run("wget --quiet " . data_url('virtualization/provision.sh'));
-    assert_script_run("wget --quiet " . data_url('virtualization/ansible_playbook.yml'));
+    foreach ("testfile.txt", "prepare_repos.sh", "check_ip.sh", "ansible_playbook.yml") {
+        assert_script_run("wget --quiet " . data_url("virtualization/$_"));
+    }
 
     foreach my $provider (@providers) {
-        my $boxname = "$version-$provider";
-
-        # Test the box *only*: bring it up and destroy it immediately afterwards
-        assert_script_run("vagrant up $boxname --provider $provider --no-provision", timeout => 1200);
-
-        # now run the actual tests via the Ansible test playbook
-        assert_script_run("vagrant provision $boxname", timeout => 1200);
-
-        # test if the box survives a reboot
-        assert_script_run("vagrant halt");
-        assert_script_run("vagrant up $boxname", timeout => 1200);
-
-        assert_script_run("vagrant destroy -f $boxname");
+        run_test_per_provider($version, $provider);
+    }
+    assert_script_run("export BOX_STATIC_IP=1");
+    foreach my $provider (@providers) {
+        run_test_per_provider($version, $provider);
     }
 
     # cleanup after all the tests ran
     foreach my $provider (@providers) {
         my $boxname = "$boxes{$provider}";
-        assert_script_run("vagrant box remove --force --provider $provider ../$boxname");
+        run_vagrant_cmd("box remove --force --provider $provider ../$boxname");
         assert_script_run("rm ../$boxname");
     }
 

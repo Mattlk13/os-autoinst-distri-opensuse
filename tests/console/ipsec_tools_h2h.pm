@@ -1,3 +1,4 @@
+
 # SUSE's Racoon tests
 #
 # Copyright © 2017 SUSE LLC
@@ -7,6 +8,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 #
+# Package: ipsec-tools iproute2
 # Summary: Test Racoon host-to-host scenario
 # Maintainer: Ben Chou <bchou@suse.com>
 
@@ -61,7 +63,7 @@ sub set_config {
     # Split subnet mask
     my ($host)   = split('/', $host_ip);
     my ($remote) = split('/', $remote_ip);
-    my $cert = $is_primary ? "server" : "client";
+    my $cert     = $is_primary ? "server" : "client";
     assert_script_run "ip route";
     assert_script_run "ip addr";
     assert_script_run "ping -c 6 10.0.2.2";

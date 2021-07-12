@@ -39,8 +39,8 @@ sub extract_assets {
     my $svirt_img_name = $image_storage . '\\' . $args->{svirt_name} . ".$format";
     hyperv_cmd("dir $svirt_img_name");
 
-    # On JeOS & CaaSP we use differential disk, so we need to merge before upload
-    if (is_jeos || is_caasp) {
+    # On JeOS & MicroOS we use differential disk, so we need to merge before upload
+    if (is_jeos || is_microos) {
         # Convert VHDX from differential disk to regular dynamic one
         hyperv_cmd("powershell -Command Convert-VHD -Path $svirt_img_name -DestinationPath ${svirt_img_name}.vhdx -VHDType Dynamic");
         hyperv_cmd("move /Y ${svirt_img_name}.vhdx $svirt_img_name");
@@ -51,7 +51,7 @@ sub extract_assets {
 
     # Upload the image as a private asset; do the upload verification on your own, hence
     # the following assert_screen(). We need Windows filename path for a short amount of time.
-    type_string "cls\n";
+    enter_cmd "cls";
     my $old_fstype = fileparse_set_fstype();
     fileparse_set_fstype('MSWin32');
     upload_asset("$image_storage\\$name", 1, 1);

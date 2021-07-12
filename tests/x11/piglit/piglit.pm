@@ -7,6 +7,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
+# Package: piglit
 # Summary: Piglit testsuite
 # - Enable piglit repository and install piglit
 # - Create a temporary directory
@@ -28,7 +29,7 @@ use x11utils 'ensure_unlocked_desktop';
 
 sub run {
     select_console('root-console');
-    pkcon_quit;
+    quit_packagekit;
 
     # install piglit testsuite from distribution repository (Tumbleweed) or from defined
     # PIGLIT_REPO (SLES)
